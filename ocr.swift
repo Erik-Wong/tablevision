@@ -219,148 +219,129 @@ for i in 0..<(merged.count - 1) {
 
 log("Non-empty rows: \(detectedRows.count)")
 
-// ─── Step 3: Consensus Column Detection ───
-// Collect gap positions from each row; find consensus boundaries
+// ─── Step 3: Fine-grained Vertical Projection Column Detection ───
+// Use a high-resolution projection to find ALL vertical whitespace gaps
 
-struct GapCandidate {
-    let pos: CGFloat
-    var count: Int
-}
-
-var gapVotes: [Int: Int] = [:]  // binned position → vote count
-let gapBins = 300
+let projBins = 2000
+var vertProj = [Int](repeating: 0, count: projBins)
 
 for row in detectedRows {
-    let items = row.items
-    guard items.count >= 2 else { continue }
-    // Find gaps between adjacent items in this row
-    var rowGaps: Set<Int> = []
-    for i in 1..<items.count {
-        let gap = items[i].left - items[i-1].right
-        if gap > 0.006 {  // significant gap (>0.6% of image width)
-            let midPos = (items[i-1].right + items[i].left) / 2.0
-            let bin = Int(midPos * CGFloat(gapBins))
-            if bin > 0 && bin < gapBins {
-                rowGaps.insert(bin)
-            }
+    var rowCoverage = [Bool](repeating: false, count: projBins)
+    for item in row.items {
+        let l = Int(item.left * CGFloat(projBins))
+        let r = Int(item.right * CGFloat(projBins))
+        for b in max(0, l)...min(projBins-1, r) {
+            rowCoverage[b] = true
         }
     }
-    // Vote for each gap found in this row
-    for bin in rowGaps {
-        gapVotes[bin, default: 0] += 1
+    for b in 0..<projBins {
+        if rowCoverage[b] { vertProj[b] += 1 }
     }
 }
 
-// Find consensus gaps: voted by at least 25% of rows
-let minVotes = max(2, detectedRows.count / 4)
-let consensusGaps = gapVotes.filter { $0.value >= minVotes }
-    .sorted { $0.key < $1.key }
+// Find all valley regions (consecutive bins with low occupancy)
+let totalRows = detectedRows.count
+var valleys: [(start: Int, end: Int, minDepth: Int)] = []
+var inValley = false
+var valleyStart = 0
+var valleyMin = Int.max
 
-// Cluster nearby consensus gaps
-var clusteredGaps: [CGFloat] = []
-for (bin, _) in consensusGaps {
-    let pos = CGFloat(bin) / CGFloat(gapBins)
-    if let last = clusteredGaps.last, pos - last < 0.03 {
-        // Merge with previous (too close)
-        clusteredGaps[clusteredGaps.count - 1] = (last + pos) / 2.0
+for b in 1..<(projBins-1) {
+    if vertProj[b] <= 1 {  // At most 1 row has text here → likely a gap
+        if !inValley {
+            inValley = true
+            valleyStart = b
+            valleyMin = vertProj[b]
+        } else {
+            valleyMin = min(valleyMin, vertProj[b])
+        }
     } else {
-        clusteredGaps.append(pos)
+        if inValley {
+            let width = b - valleyStart
+            if width >= 3 {  // Minimum gap width
+                valleys.append((valleyStart, b, valleyMin))
+            }
+            inValley = false
+        }
+    }
+}
+if inValley {
+    let width = projBins - 1 - valleyStart
+    if width >= 3 {
+        valleys.append((valleyStart, projBins-1, valleyMin))
     }
 }
 
-// Build column boundaries from consensus gaps
+// Score each valley: wider gaps with fewer text rows are better column separators
+let edgeMargin = 15
+let validValleys = valleys.filter { $0.start > edgeMargin && $0.end < projBins - edgeMargin }
+let scoredValleys = validValleys.map { v in
+    (start: v.start, end: v.end, score: Double(v.end - v.start) * (1.0 - Double(v.minDepth) / Double(max(1, totalRows))))
+}.sorted { $0.score > $1.score }
+
+// Select top valleys as column boundaries (up to 12 columns)
+let maxCols = 12
+var selectedGaps: [(start: Int, end: Int)] = []
+for v in scoredValleys {
+    if selectedGaps.count >= maxCols - 1 { break }
+    // Don't select gaps that overlap with already selected ones
+    let overlaps = selectedGaps.contains { abs(v.start - $0.start) < 10 }
+    if !overlaps {
+        selectedGaps.append((v.start, v.end))
+    }
+}
+selectedGaps.sort { $0.start < $1.start }
+
+// Build column boundaries from selected gaps
 var colBounds: [CGFloat] = [0.0]
-colBounds.append(contentsOf: clusteredGaps)
+for gap in selectedGaps {
+    let mid = CGFloat(gap.start + gap.end) / (2.0 * CGFloat(projBins))
+    colBounds.append(mid)
+}
 colBounds.append(1.0)
 
-// If consensus found too few columns, fall back to vertical projection
-if colBounds.count <= 2 {
-    log("Consensus found \(colBounds.count - 1) gaps, falling back to vertical projection")
-    
-    let colBins = 800
-    var vertProj = [Int](repeating: 0, count: colBins)
-    for row in detectedRows {
-        var rowCoverage = [Bool](repeating: false, count: colBins)
-        for item in row.items {
-            let l = Int(item.left * CGFloat(colBins))
-            let r = Int(item.right * CGFloat(colBins))
-            for b in max(0, l)...min(colBins-1, r) {
-                rowCoverage[b] = true
-            }
-        }
-        for b in 0..<colBins { if rowCoverage[b] { vertProj[b] += 1 } }
+// If too few columns detected, lower the threshold and try again
+if colBounds.count <= 3 && detectedRows.count >= 3 {
+    log("Only \(colBounds.count-1) columns, retrying with lower threshold")
+    var retryGaps: [(start: Int, end: Int)] = []
+    for v in valleys where v.start > edgeMargin && v.end < projBins - edgeMargin {
+        if retryGaps.count >= 15 { break }
+        let overlaps = retryGaps.contains { abs(v.start - $0.start) < 8 }
+        if !overlaps { retryGaps.append((v.start, v.end)) }
     }
-    
-    let gapThreshold = max(1, detectedRows.count / 6)
-    var projGaps: [(start: Int, end: Int)] = []
-    var gs: Int? = nil
-    for b in 0..<colBins {
-        if vertProj[b] <= gapThreshold {
-            if gs == nil { gs = b }
-        } else {
-            if let g = gs, b - g >= 4 { projGaps.append((g, b - 1)) }
-            gs = nil
-        }
-    }
-    if let g = gs, colBins - g >= 4 { projGaps.append((g, colBins - 1)) }
-    
+    retryGaps.sort { $0.start < $1.start }
     colBounds = [0.0]
-    for gap in projGaps where gap.start > 8 && gap.end < colBins - 8 {
-        colBounds.append(CGFloat(gap.start + gap.end) / (2.0 * CGFloat(colBins)))
-    }
+    for gap in retryGaps { colBounds.append(CGFloat(gap.start + gap.end) / (2.0 * CGFloat(projBins))) }
     colBounds.append(1.0)
 }
 
-// Final fallback: K-Means
-if colBounds.count <= 2 && detectedRows.count >= 3 {
-    log("Falling back to K-Means")
-    var xPos: [CGFloat] = []
-    for row in detectedRows { for item in row.items { xPos.append(item.cx) } }
-    
-    func kmeans(data: [CGFloat], k: Int, maxIter: Int = 30) -> ([Int], [CGFloat]) {
-        guard data.count >= k, k > 0 else { return ([], []) }
-        let sorted = data.sorted()
-        var centroids: [CGFloat] = (0..<k).map { i in sorted[i * (sorted.count - 1) / max(k - 1, 1)] }
-        var assignments = [Int](repeating: 0, count: data.count)
-        for _ in 0..<maxIter {
-            var changed = false
-            for i in 0..<data.count {
-                var bestD = CGFloat.infinity; var bestC = 0
-                for c in 0..<k { let d = abs(data[i] - centroids[c]); if d < bestD { bestD = d; bestC = c } }
-                if assignments[i] != bestC { assignments[i] = bestC; changed = true }
-            }
-            if !changed { break }
-            var sums = [CGFloat](repeating: 0, count: k); var counts = [Int](repeating: 0, count: k)
-            for i in 0..<data.count { sums[assignments[i]] += data[i]; counts[assignments[i]] += 1 }
-            for c in 0..<k { if counts[c] > 0 { centroids[c] = sums[c] / CGFloat(counts[c]) } }
-        }
-        return (assignments, centroids)
-    }
-    
-    let maxK = min(10, xPos.count / 3)
-    var bestK = 2
-    if maxK >= 3 {
-        var wss: [Double] = []
-        for k in 2...maxK {
-            let (a, c) = kmeans(data: xPos, k: k)
-            if !c.isEmpty { wss.append(zip(a, xPos).reduce(0.0) { $0 + pow(Double($1.1 - c[$1.0]), 2) }) }
-        }
-        if wss.count >= 3 {
-            for i in 1..<(wss.count - 1) {
-                if (wss[i-1] - wss[i]) - (wss[i] - wss[i+1]) > 0 { bestK = i + 2 }
+// Final fallback: simple gap detection per row, find most common gaps
+if colBounds.count <= 3 && detectedRows.count >= 3 {
+    log("Retry also low, using per-row gap frequency")
+    var gapFreq: [Int: Int] = [:]
+    for row in detectedRows {
+        let items = row.items
+        guard items.count >= 2 else { continue }
+        var rowGaps: Set<Int> = []
+        for i in 1..<items.count {
+            let gap = items[i].left - items[i-1].right
+            if gap > 0.005 {
+                let mid = Int(((items[i-1].right + items[i].left) / 2.0) * 200.0)
+                if mid > 0 && mid < 200 { rowGaps.insert(mid) }
             }
         }
+        for g in rowGaps { gapFreq[g, default: 0] += 1 }
     }
-    let (_, cents) = kmeans(data: xPos, k: bestK)
-    let sortedC = cents.sorted()
+    let minVotes = max(2, detectedRows.count / 5)
+    let freqGaps = gapFreq.filter { $0.value >= minVotes }.map { CGFloat($0.key) / 200.0 }.sorted()
     colBounds = [0.0]
-    for i in 0..<(sortedC.count - 1) { colBounds.append((sortedC[i] + sortedC[i+1]) / 2.0) }
+    for g in freqGaps { colBounds.append(g) }
     colBounds.append(1.0)
 }
 
 let numCols = max(2, colBounds.count - 1)
-log("Column detection: \(numCols) columns (consensus: \(consensusGaps.count), projection: \(colBounds.count - 1))")
-log("Column boundaries: \(colBounds.map { String(format: "%.3f", $0) })")
+log("Columns: \(numCols) (from \(validValleys.count) valleys, top \(selectedGaps.count) selected)")
+log("Boundaries: \(colBounds.map { String(format: "%.3f", $0) })")
 
 // ─── Step 4: Grid Assignment & Multi-line Merging ───
 

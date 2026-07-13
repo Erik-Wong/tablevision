@@ -861,140 +861,25 @@ function correctOcrText(text) {
   return result;
 }
 
-// ─── Final normalization: classify values by type, assign to correct columns ───
+// ─── Lightweight post-processing: clean headers, fill missing with / ───
 function normalizeTable() {
-  if(tableData.length === 0 || headers.length < 3) return;
-
-  const hCode = headers[0], hName = headers[1], hUnit = headers[2];
-  const priceHs = headers.slice(3, 7);
-  const hDate = headers[7], hRegion = headers[8], hNote = headers[9] || headers[headers.length-1];
+  if(tableData.length === 0) return;
 
   // Clean header names
   headers = ['商品代码', '商品名称', '售卖单位', '原售价', '现售价', '原会员价', '现会员价', '生效日期', '门店区域', '备注'];
 
-  const UNIT_SET = new Set(['公斤','kg','KG','Kg','瓶','盒','袋','包','条','罐','桶','排',
-    '支','提','连包','板','箱','个','杯','瓶装','罐装','盒装','袋装']);
-
-  const newRows = [];
-
   for(const row of tableData) {
-    // Collect all values and split space-merged tokens
-    const rawItems = [];
+    // Fill empty cells with /
     for(const h of headers) {
-      const v = (row[h] || '').trim();
-      if(v && v !== '-' && v !== '/') {
-        // If this cell has spaces, it might contain merged tokens - split them
-        if(v.includes(' ') && v.split(/\s+/).length >= 3 && !v.includes('；')) {
-          rawItems.push(...v.split(/\s+/).filter(Boolean));
-        } else {
-          rawItems.push(v);
-        }
+      if(!row[h] || row[h].trim() === '' || row[h].trim() === '-') {
+        row[h] = '/';
       }
     }
-
-    if(rawItems.length === 0) continue;
-
-    // Classify each item
-    const classified = { code: [], nameParts: [], unit: [], prices: [], dates: [], regions: [], notes: [] };
-
-    for(const item of rawItems) {
-      const si = item.trim();
-      if(!si) continue;
-
-      // CODE: exactly 5-6 digit number, not starting with 0 for prices
-      if(/^\d{5,6}$/.test(si) && parseInt(si) > 100) {
-        classified.code.push(si);
-      }
-      // DATE patterns
-      else if(/^\d+月\d+日/.test(si) || /^\d+[\/]\d+$/.test(si)) {
-        classified.dates.push(si);
-      }
-      // UNIT: exact match
-      else if(UNIT_SET.has(si)) {
-        classified.unit.push(si);
-      }
-      // PRICE: pure number with optional decimal, > 0.5 (to avoid quantities like "1")
-      else if(/^[\d.]+$/.test(si) && parseFloat(si) > 0.5) {
-        classified.prices.push(si);
-      }
-      // PRICE: "X元/Y" pattern  
-      else if(/^\d+元/.test(si)) {
-        classified.prices.push(si);
-      }
-      // REGION
-      else if((/省|市|全国|区域|门店|浙江|江苏|安徽|福建|广东|河南|湖南/.test(si)) && si.length < 35) {
-        classified.regions.push(si);
-      }
-      // NOTE keywords
-      else if(/取消|新增|特价|折扣|统一|老品|同步|打印|促销|参与|AAD|ADE/.test(si) && si.length < 30) {
-        classified.notes.push(si);
-      }
-      // Weights/specs like "1*2kg", "220g*4*6板", "1x2kg", "142kg"
-      else if(/^\d+[*xX]\d/.test(si) || /^\d+g\*/.test(si) || /^\d+kg$/i.test(si)) {
-        classified.notes.push(si);  // specs go to notes
-      }
-      // Otherwise → name part
-      else {
-        classified.nameParts.push(si);
-      }
+    // Apply OCR corrections
+    for(const h of headers) {
+      if(row[h] && row[h] !== '/') row[h] = correctOcrText(row[h]);
     }
-
-    // Build normalized row
-    const nr = {};
-
-    // Code: use first found
-    nr[hCode] = classified.code[0] || '/';
-
-    // Name: join name parts, filter out anything that looks like noise
-    const nameFiltered = classified.nameParts.filter(n => {
-      if(/^[\d.]+$/.test(n) && parseFloat(n) < 10) return false; // small numbers are likely prices
-      if(n.length <= 1 && !/[一-鿿]/.test(n)) return false; // single latin char noise
-      return true;
-    });
-    nr[hName] = nameFiltered.join(' ') || '/';
-
-    // Unit: first found
-    nr[hUnit] = classified.unit[0] || '/';
-
-    // Prices: distribute across price columns (up to 4)
-    for(let i = 0; i < 4; i++) {
-      nr[priceHs[i]] = classified.prices[i] || '';
-    }
-    // If no prices at all, mark first price col as /
-    if(classified.prices.length === 0) {
-      nr[priceHs[0]] = '/';
-    }
-
-    // Date
-    nr[hDate] = classified.dates[0] || '/';
-
-    // Region
-    nr[hRegion] = classified.regions.join('; ') || '/';
-
-    // Notes
-    nr[hNote] = classified.notes.join('; ') || '';
-
-    // Fix: if name starts with unit word, move to unit column
-    let nameVal = nr[hName];
-    if(nameVal && nameVal !== '/') {
-      for(const uw of UNIT_SET) {
-        if(nameVal.startsWith(uw + ' ')) {
-          nr[hName] = nameVal.substring(uw.length + 1);
-          if(nr[hUnit] === '/') nr[hUnit] = uw;
-          break;
-        }
-        if(nameVal.endsWith(' ' + uw)) {
-          nr[hName] = nameVal.substring(0, nameVal.length - uw.length - 1);
-          if(nr[hUnit] === '/') nr[hUnit] = uw;
-          break;
-        }
-      }
-    }
-
-    newRows.push(nr);
   }
-
-  tableData = newRows;
 }
 
 function parseLinesToTable(lines, userCols) {

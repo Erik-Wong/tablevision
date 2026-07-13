@@ -18,6 +18,17 @@ mkdir -p "$(dirname "$LOG_FILE")"
 log "======== TableVision LaunchAgent 启动 ========"
 log "工作目录: $DIR"
 
+# 加载配置文件
+if [ -f "$DIR/config.env" ]; then
+    log "加载配置: $DIR/config.env"
+    # 读取 .env 文件并导出环境变量
+    set -a
+    source "$DIR/config.env"
+    set +a
+else
+    log "WARNING: 配置文件不存在: $DIR/config.env"
+fi
+
 # Check OCR binary
 if [ ! -f "$DIR/ocr" ]; then
     log "OCR 二进制文件不存在，正在编译…"

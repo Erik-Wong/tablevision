@@ -7,3 +7,4 @@ uploads/*
 !uploads/.gitkeep
 outputs/*.xlsx
 .vercel
+config.env

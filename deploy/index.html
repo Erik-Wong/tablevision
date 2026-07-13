@@ -719,7 +719,7 @@ async function startOCR() {
   // Finalize
   progressFill.style.width = '100%';
 
-  // Post-process: smart header detection + normalize columns
+  // Post-process: smart header detection (non-AI) + normalize columns
   if(tableData.length > 0) {
     detectAndFixHeaders();
     normalizeTable();
@@ -775,8 +775,13 @@ function appendImageData(lines, userCols) {
   }
 }
 
-// Smart header detection: find the best header row, use it, remove other header-like rows
+// Smart header detection: only run if headers don't match expected format
 function detectAndFixHeaders() {
+  const TARGET = ['商品代码','商品名称','售卖单位','原售价','现售价','原会员价','现会员价','生效日期','门店区域','备注'];
+  // If headers already match target, skip
+  if(headers.length === TARGET.length && headers.every((h,i) => h === TARGET[i])) {
+    return;
+  }
   const HEADER_KW = ['代码','名称','单位','售价','会员价','日期','区域','备注','规格','属性',
     'kg','包','瓶','盒','生效','门店','商品','价格','品名','原价','现价','调整','内容',
     '序号','图片','产品','变更','后属','售卖','时间'];

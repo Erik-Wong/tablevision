@@ -666,7 +666,7 @@ async function startOCR() {
             const aiData = await aiResp.json();
             if(aiData.rows && aiData.rows.length > 0) {
               // AI returns rows with correct column names already
-              parsed = { headers: ['商品代码','商品名称','现售价','现会员价','生效日期'], rows: aiData.rows };
+              parsed = { headers: ['商品代码','商品名称','售卖单位','原售价','现售价','原会员价','现会员价','生效日期','门店区域','备注'], rows: aiData.rows };
               progressLabel.textContent = `第 ${i+1}/${total} 张完成 (AI: ${aiData.rows.length} 行)`;
             } else {
               throw new Error('AI returned empty');
@@ -911,85 +911,23 @@ function correctOcrText(text) {
   return result;
 }
 
-// ─── Content-based column assignment: match values by type, not position ───
+// ─── Normalize: fill missing cells with /, apply OCR corrections ───
 function normalizeTable() {
   if(tableData.length === 0) return;
 
-  const oldHeaders = [...headers];
-  const TARGET = ['商品代码', '商品名称', '现售价', '现会员价', '生效日期'];
+  const TARGET = ['商品代码','商品名称','售卖单位','原售价','现售价','原会员价','现会员价','生效日期','门店区域','备注'];
 
-  // Collect ALL values from each row into a flat pool, then classify and assign
-  tableData = tableData.map(oldRow => {
-    // Gather all non-empty values from the row
-    const pool = [];
-    for(const h of oldHeaders) {
-      const v = (oldRow[h] || '').trim();
-      if(v && v !== '/' && v !== '-') {
-        // Split by newlines and spaces for merged cells
-        const parts = v.split(/[\n\\n]+/).map(s => s.trim()).filter(Boolean);
-        for(const p of parts) {
-          // Further split if there are multiple space-separated tokens that look like separate values
-          const tokens = p.split(/\s+/);
-          if(tokens.length >= 3 && tokens.some(t => /^\d{5,6}$/.test(t))) {
-            pool.push(...tokens);
-          } else {
-            pool.push(p);
-          }
-        }
-      }
-    }
-
-    // Classify each value
-    const codes = [], names = [], prices = [], memberPrices = [], dates = [];
-
-    for(const val of pool) {
-      const v = val.trim();
-      if(!v) continue;
-
-      // 6-digit code
-      if(/^\d{5,6}$/.test(v) && parseInt(v) > 10000) {
-        codes.push(v);
-      }
-      // Date
-      else if(/\d+月\d+日/.test(v)) {
-        dates.push(v);
-      }
-      // Price: pure number with decimal, > 0.5
-      else if(/^[\d.]+$/.test(v) && parseFloat(v) > 0.5 && parseFloat(v) < 1000) {
-        prices.push(v);
-      }
-      // Price with 元
-      else if(/^\d+元/.test(v)) {
-        prices.push(v);
-      }
-      // Name: Chinese text, 3+ chars, not purely numeric
-      else if(/[\u4e00-\u9fff]/.test(v) && v.length >= 2 && !/^\d+$/.test(v)) {
-        names.push(v);
-      }
-      // Short alphanumeric → might be spec or noise, skip
-    }
-
-    // Build output row
+  tableData = tableData.map(row => {
     const nr = {};
-    nr[TARGET[0]] = codes[0] || '/';
-    nr[TARGET[1]] = names.join(' ') || '/';
-
-    // Assign prices: first price → 现售价, second → 现会员价
-    // But if only one price, it's 现售价
-    const allPrices = [...prices];
-    nr[TARGET[2]] = allPrices[0] || '/';
-    nr[TARGET[3]] = allPrices[1] || (allPrices.length === 1 ? '/' : '/');
-
-    nr[TARGET[4]] = dates[0] || '/';
-
+    for(const h of TARGET) {
+      const val = (row[h] || '').toString().trim();
+      nr[h] = (val && val !== '-' && val !== '/') ? correctOcrText(val) : '/';
+    }
     return nr;
   });
 
-  // Filter out completely empty rows (all /)
-  tableData = tableData.filter(r => {
-    const vals = TARGET.map(h => r[h]);
-    return vals.some(v => v !== '/' && v !== '');
-  });
+  // Filter completely empty rows
+  tableData = tableData.filter(r => TARGET.some(h => r[h] !== '/'));
 
   headers = TARGET;
 }

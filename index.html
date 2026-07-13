@@ -637,21 +637,20 @@ async function startOCR() {
 
       // Parse lines into table
       const userCols = parseInt(document.getElementById('colCountInput').value) || 0;
-      const parsed = parseLinesToTable(data.lines, userCols);
 
-      // Merge into main table
       if(i === 0) {
-        // First image: set headers and data
+        // First image: use header detection
+        const parsed = parseLinesToTable(data.lines, userCols);
         headers = parsed.headers;
         tableData = parsed.rows;
       } else {
-        // Subsequent images: skip header row, merge data rows
-        mergeTableData(parsed);
+        // Subsequent images: treat ALL rows as data (skip header detection)
+        appendImageData(data.lines, userCols);
       }
 
       setStep(4);
       progressFill.style.width = (pctStart + 18) + '%';
-      progressLabel.textContent = `第 ${i+1}/${total} 张完成 (${parsed.rows.length} 行)`;
+      progressLabel.textContent = `第 ${i+1}/${total} 张完成 (${data.lines.length} 行)`;
 
     } catch(err) {
       allOk = false;
@@ -684,40 +683,37 @@ async function startOCR() {
   }, 500);
 }
 
-// Merge parsed table data into existing table
-function mergeTableData(parsed) {
-  if(parsed.rows.length === 0) return;
+// Append data from subsequent images (treat all rows as data, map by position)
+function appendImageData(lines, userCols) {
+  // Parse lines: split by tab, trim
+  const parsed = lines.map(line => {
+    const parts = line.split('\t');
+    return parts;  // keep empty strings for positional mapping
+  }).filter(parts => parts.some(p => p.trim().length > 0));
 
-  // Build column mapping: parsed.headers → existing headers
-  const colMap = [];  // parsed col index → target header name
+  if(parsed.length === 0) return;
 
-  for(const ph of parsed.headers) {
-    const lc = ph.toLowerCase().trim();
-    const matchIdx = headers.findIndex(h => h.toLowerCase().trim() === lc);
-    if(matchIdx >= 0) {
-      colMap.push(headers[matchIdx]);
-    } else {
-      // New column - generate unique name
-      let newName = ph || ('列' + (headers.length + 1));
-      let finalName = newName;
-      let suffix = 1;
-      while(headers.includes(finalName)) {
-        suffix++;
-        finalName = newName + '_' + suffix;
-      }
-      headers.push(finalName);
-      colMap.push(finalName);
-    }
+  // Determine column count for this image
+  let numCols;
+  if(userCols > 0) {
+    numCols = Math.max(userCols, headers.length);
+  } else {
+    const maxCols = Math.max(...parsed.map(p => p.length));
+    numCols = Math.max(maxCols, headers.length);
   }
 
-  // Append parsed rows
-  for(const prow of parsed.rows) {
-    const newRow = {};
-    headers.forEach(h => { newRow[h] = ''; });
-    parsed.headers.forEach((ph, i) => {
-      newRow[colMap[i]] = prow[ph] || '';
+  // Add new columns if this image has more than current headers
+  while(headers.length < numCols) {
+    headers.push('列' + (headers.length + 1));
+  }
+
+  // Append each row as data
+  for(const parts of parsed) {
+    const row = {};
+    headers.forEach((h, i) => {
+      row[h] = (i < parts.length ? parts[i] : '').trim();
     });
-    tableData.push(newRow);
+    tableData.push(row);
   }
 }
 

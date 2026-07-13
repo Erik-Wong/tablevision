@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """TableVision Backend — macOS Vision OCR + AI structuring + 静态前端"""
-import http.server, json, subprocess, os, sys, tempfile, re, urllib.request
+import http.server, json, subprocess, os, sys, tempfile, re, urllib.request, threading
 from pathlib import Path
 from io import BytesIO
 from fpdf import FPDF
+from socketserver import ThreadingMixIn
 
 PORT = 8765
 BASE_DIR = Path(__file__).parent
@@ -15,6 +16,10 @@ CN_FONT = '/System/Library/Fonts/STHeiti Medium.ttc'
 AI_API_KEY = os.environ.get('OPENAI_API_KEY', '')
 AI_BASE_URL = os.environ.get('OPENAI_BASE_URL', 'https://api.deepseek.com/v1')
 AI_MODEL = os.environ.get('AI_MODEL', 'deepseek-chat')
+
+class ThreadedHTTPServer(ThreadingMixIn, http.server.HTTPServer):
+    """Handle requests concurrently so health checks work during OCR"""
+    daemon_threads = True
 
 def parse_multipart(body, boundary):
     """Simple multipart/form-data parser"""
@@ -351,7 +356,7 @@ if __name__ == '__main__':
 ║  Ctrl+C 停止                            ║
 ╚══════════════════════════════════════════╝
 """)
-    server = http.server.HTTPServer(('0.0.0.0', PORT), Handler)
+    server = ThreadedHTTPServer(('0.0.0.0', PORT), Handler)
     try:
         server.serve_forever()
     except KeyboardInterrupt:

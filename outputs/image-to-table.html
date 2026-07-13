@@ -439,7 +439,7 @@ async function checkConnection() {
   label.textContent = '检测中…';
 
   try {
-    const resp = await fetch(OCR_API + '/health', { signal: AbortSignal.timeout(3000) });
+    const resp = await fetch(OCR_API + '/health', { signal: AbortSignal.timeout(8000) });
     if (resp.ok) {
       const info = await resp.json();
       isLocalOnline = true;

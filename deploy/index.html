@@ -220,6 +220,32 @@ body{font-family:var(--font);background:var(--bg-0);color:var(--text-1);min-heig
   padding:3rem;text-align:center;max-width:500px;animation:fadeUp .3s ease}
 .paste-box .icon{font-size:3rem;margin-bottom:1rem}
 .paste-box p{color:var(--text-2);font-size:.9rem}
+
+/* ── Thumbnail Strip ── */
+.thumb-strip{display:none;max-width:680px;margin:.8rem auto 0;gap:.5rem;flex-wrap:wrap;align-items:center}
+.thumb-strip.active{display:flex}
+.thumb-item{position:relative;width:72px;height:54px;border-radius:var(--radius-xs);overflow:hidden;
+  border:2px solid var(--border);cursor:pointer;transition:var(--transition);flex-shrink:0}
+.thumb-item:hover,.thumb-item.current{border-color:var(--cyan);box-shadow:0 0 8px var(--cyan-b)}
+.thumb-item img{width:100%;height:100%;object-fit:cover}
+.thumb-item .thumb-rm{position:absolute;top:2px;right:2px;width:18px;height:18px;border-radius:50%;
+  background:rgba(0,0,0,.7);color:#fff;font-size:10px;display:flex;align-items:center;justify-content:center;
+  cursor:pointer;opacity:0;transition:var(--transition);border:none;line-height:1}
+.thumb-item:hover .thumb-rm{opacity:1}
+.thumb-badge{font-family:var(--mono);font-size:.72rem;color:var(--cyan);white-space:nowrap;padding-left:.3rem}
+.thumb-add{width:72px;height:54px;border-radius:var(--radius-xs);border:2px dashed var(--border-h);
+  display:flex;align-items:center;justify-content:center;cursor:pointer;color:var(--text-3);
+  font-size:1.3rem;transition:var(--transition);flex-shrink:0}
+.thumb-add:hover{border-color:var(--cyan);color:var(--cyan);background:var(--cyan-g)}
+
+/* ── Image nav arrows ── */
+.img-nav{display:none;align-items:center;gap:.3rem}
+.img-nav.active{display:flex}
+.img-nav-btn{width:28px;height:28px;border-radius:50%;border:1px solid var(--border);background:var(--bg-2);
+  color:var(--text-2);font-size:.8rem;cursor:pointer;display:flex;align-items:center;justify-content:center;
+  transition:var(--transition)}
+.img-nav-btn:hover{background:var(--bg-3);color:var(--text-1)}
+.img-nav-info{font-family:var(--mono);font-size:.7rem;color:var(--text-3)}
 </style>
 </head>
 <body>
@@ -258,8 +284,11 @@ body{font-family:var(--font);background:var(--bg-0);color:var(--text-1);min-heig
         <span>中文 / 英文</span>
         <span>本地处理</span>
       </div>
-      <input type="file" class="upload-input" id="fileInput" accept="image/*">
+      <input type="file" class="upload-input" id="fileInput" accept="image/*" multiple>
     </div>
+
+    <!-- Multi-image thumbnail strip -->
+    <div class="thumb-strip" id="thumbStrip"></div>
 
     <div class="settings-bar">
       <div class="setting-item">
@@ -328,6 +357,11 @@ body{font-family:var(--font);background:var(--bg-0);color:var(--text-1);min-heig
       <div class="panel fade-up">
         <div class="panel-header">
           <div class="panel-title"><span class="dot blue"></span>原始图片</div>
+          <div class="img-nav" id="imgNav">
+            <button class="img-nav-btn" onclick="prevImage()">◀</button>
+            <span class="img-nav-info" id="imgNavInfo">1/1</span>
+            <button class="img-nav-btn" onclick="nextImage()">▶</button>
+          </div>
           <button class="btn btn-ghost btn-icon" onclick="zoomImage()" title="放大">⊕</button>
         </div>
         <div class="panel-body">
@@ -380,8 +414,8 @@ body{font-family:var(--font);background:var(--bg-0);color:var(--text-1);min-heig
 
 <script>
 // ─── State ───
-let uploadedFile = null;
-let uploadedDataUrl = null;
+let uploadedFiles = [];        // Array of {file, dataUrl, name}
+let currentPreviewIdx = 0;    // Which image is shown in preview
 let tableData = [];
 let headers = [];
 let isEditable = true;
@@ -426,52 +460,114 @@ const startBtn = document.getElementById('startBtn');
 const resetBtn = document.getElementById('resetBtn');
 
 uploadZone.addEventListener('click', () => fileInput.click());
-fileInput.addEventListener('change', e => { if(e.target.files[0]) handleFile(e.target.files[0]); });
+fileInput.addEventListener('change', e => {
+  if(e.target.files.length > 0) handleFiles(Array.from(e.target.files));
+});
 
 uploadZone.addEventListener('dragover', e => { e.preventDefault(); uploadZone.classList.add('dragover'); });
 uploadZone.addEventListener('dragleave', () => uploadZone.classList.remove('dragover'));
 uploadZone.addEventListener('drop', e => {
   e.preventDefault(); uploadZone.classList.remove('dragover');
-  const f = e.dataTransfer.files[0];
-  if(f && f.type.startsWith('image/')) handleFile(f);
+  const files = Array.from(e.dataTransfer.files).filter(f => f.type.startsWith('image/'));
+  if(files.length > 0) handleFiles(files);
 });
 
 document.addEventListener('paste', e => {
   const items = e.clipboardData?.items;
   if(!items) return;
   for(const item of items) {
-    if(item.type.startsWith('image/')) { handleFile(item.getAsFile()); break; }
+    if(item.type.startsWith('image/')) { handleFiles([item.getAsFile()]); break; }
   }
 });
 
-function handleFile(file) {
-  if(file.size > 20 * 1024 * 1024) { toast('文件超过 20MB 限制', 'error'); return; }
-  uploadedFile = file;
-  const reader = new FileReader();
-  reader.onload = e => {
-    uploadedDataUrl = e.target.result;
-    document.getElementById('previewImg').src = uploadedDataUrl;
-    uploadZone.innerHTML = `
-      <div class="upload-icon" style="opacity:.3">✓</div>
-      <div class="upload-title">${file.name}</div>
-      <div class="upload-desc">${(file.size/1024).toFixed(1)} KB · 已就绪</div>
-    `;
+function handleFiles(files) {
+  if(!files || files.length === 0) return;
+  const validFiles = files.filter(f => f.size <= 20 * 1024 * 1024);
+  if(validFiles.length < files.length) toast('部分文件超过 20MB 限制已跳过', 'error');
+  if(validFiles.length === 0) return;
+
+  // Read all files as data URLs
+  Promise.all(validFiles.map(f => new Promise(resolve => {
+    const reader = new FileReader();
+    reader.onload = e => resolve({ file: f, dataUrl: e.target.result, name: f.name });
+    reader.readAsDataURL(f);
+  }))).then(results => {
+    uploadedFiles = [...uploadedFiles, ...results];
+    currentPreviewIdx = uploadedFiles.length - results.length; // show first new image
+    renderThumbnails();
+    updatePreview();
     startBtn.style.display = 'inline-flex';
     resetBtn.style.display = 'inline-flex';
-  };
-  reader.readAsDataURL(file);
+    toast(`已添加 ${results.length} 张图片 (共 ${uploadedFiles.length} 张)`, 'success');
+  });
+}
+
+function removeImage(idx) {
+  uploadedFiles.splice(idx, 1);
+  if(uploadedFiles.length === 0) {
+    resetAll();
+    return;
+  }
+  if(currentPreviewIdx >= uploadedFiles.length) currentPreviewIdx = uploadedFiles.length - 1;
+  renderThumbnails();
+  updatePreview();
+}
+
+function renderThumbnails() {
+  const strip = document.getElementById('thumbStrip');
+  if(uploadedFiles.length === 0) {
+    strip.classList.remove('active');
+    strip.innerHTML = '';
+    return;
+  }
+  strip.classList.add('active');
+  let html = '';
+  uploadedFiles.forEach((f, i) => {
+    html += `<div class="thumb-item${i === currentPreviewIdx ? ' current' : ''}" onclick="currentPreviewIdx=${i};renderThumbnails();updatePreview()" title="${escAttr(f.name)}">
+      <img src="${f.dataUrl}" alt="">
+      <button class="thumb-rm" onclick="event.stopPropagation();removeImage(${i})">×</button>
+    </div>`;
+  });
+  html += `<div class="thumb-add" onclick="fileInput.click()" title="添加更多图片">+</div>`;
+  html += `<span class="thumb-badge">${uploadedFiles.length} 张</span>`;
+  strip.innerHTML = html;
+}
+
+function updatePreview() {
+  document.getElementById('previewImg').src = uploadedFiles[currentPreviewIdx]?.dataUrl || '';
+  const nav = document.getElementById('imgNav');
+  if(uploadedFiles.length > 1) {
+    nav.classList.add('active');
+    document.getElementById('imgNavInfo').textContent = `${currentPreviewIdx + 1}/${uploadedFiles.length}`;
+  } else {
+    nav.classList.remove('active');
+  }
+}
+
+function prevImage() {
+  if(uploadedFiles.length <= 1) return;
+  currentPreviewIdx = (currentPreviewIdx - 1 + uploadedFiles.length) % uploadedFiles.length;
+  renderThumbnails(); updatePreview();
+}
+function nextImage() {
+  if(uploadedFiles.length <= 1) return;
+  currentPreviewIdx = (currentPreviewIdx + 1) % uploadedFiles.length;
+  renderThumbnails(); updatePreview();
 }
 
 function resetAll() {
-  uploadedFile = null; uploadedDataUrl = null; uploadedBlob = null;
+  uploadedFiles = []; currentPreviewIdx = 0;
   tableData = []; headers = [];
   fileInput.value = '';
   uploadZone.innerHTML = `
     <div class="upload-icon">📷</div>
     <div class="upload-title">拖放图片到此处，或点击上传</div>
-    <div class="upload-desc">支持 JPG、PNG、BMP、WebP 格式，也可 Ctrl+V 粘贴截图</div>
-    <div class="upload-hint"><span>最大 20MB</span><span>中文 / 英文</span><span>本地处理</span></div>
+    <div class="upload-desc">支持 JPG、PNG、BMP、WebP 格式，可多选，也可 Ctrl+V 粘贴截图</div>
+    <div class="upload-hint"><span>最大 20MB</span><span>中文 / 英文</span><span>本地处理</span><span>支持多张</span></div>
   `;
+  document.getElementById('thumbStrip').classList.remove('active');
+  document.getElementById('thumbStrip').innerHTML = '';
+  document.getElementById('imgNav').classList.remove('active');
   startBtn.style.display = 'none';
   resetBtn.style.display = 'none';
   document.getElementById('processing').classList.remove('active');
@@ -479,9 +575,11 @@ function resetAll() {
   document.getElementById('statsBar').style.display = 'none';
 }
 
+function escAttr(s) { return (s||'').replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+
 // ─── OCR Engine (macOS Vision via backend) ───
 async function startOCR() {
-  if(!uploadedFile && !uploadedDataUrl) return;
+  if(uploadedFiles.length === 0) return;
   if(!isLocalOnline) {
     toast('本地 OCR 服务未连接，请先启动 python3 server.py', 'error');
     return;
@@ -494,81 +592,132 @@ async function startOCR() {
 
   const progressFill = document.getElementById('progressFill');
   const progressLabel = document.getElementById('progressLabel');
+  const total = uploadedFiles.length;
 
-  setStep(1);
-  progressLabel.textContent = '正在连接 OCR 引擎…';
-  progressFill.style.width = '10%';
+  // Reset table data
+  headers = [];
+  tableData = [];
+  let allOk = true;
 
-  try {
-    // Get image blob
-    let blob;
-    if(uploadedFile) {
-      blob = uploadedFile;
-    } else {
-      const resp = await fetch(uploadedDataUrl);
-      blob = await resp.blob();
+  for(let i = 0; i < total; i++) {
+    const f = uploadedFiles[i];
+    const pctStart = (i / total) * 90;
+    setStep(1);
+    progressLabel.textContent = `正在识别第 ${i+1}/${total} 张: ${f.name}…`;
+    progressFill.style.width = pctStart + '%';
+
+    try {
+      // Get blob from data URL
+      const resp0 = await fetch(f.dataUrl);
+      const blob = await resp0.blob();
+
+      setStep(2);
+      progressFill.style.width = (pctStart + 7) + '%';
+
+      // OCR API call
+      const formData = new FormData();
+      formData.append('image', blob, f.name || 'image.png');
+      const resp = await fetch(OCR_API + '/api/ocr', { method: 'POST', body: formData });
+
+      if(!resp.ok) {
+        const errData = await resp.json().catch(() => ({error: resp.statusText}));
+        throw new Error(errData.error || `HTTP ${resp.status}`);
+      }
+
+      const data = await resp.json();
+      progressFill.style.width = (pctStart + 13) + '%';
+
+      if(!data.lines || data.lines.length === 0) {
+        toast(`第 ${i+1} 张未识别到文字，跳过`, 'error');
+        continue;
+      }
+
+      setStep(3);
+      progressFill.style.width = (pctStart + 16) + '%';
+
+      // Parse lines into table
+      const userCols = parseInt(document.getElementById('colCountInput').value) || 0;
+      const parsed = parseLinesToTable(data.lines, userCols);
+
+      // Merge into main table
+      if(i === 0) {
+        // First image: set headers and data
+        headers = parsed.headers;
+        tableData = parsed.rows;
+      } else {
+        // Subsequent images: skip header row, merge data rows
+        mergeTableData(parsed);
+      }
+
+      setStep(4);
+      progressFill.style.width = (pctStart + 18) + '%';
+      progressLabel.textContent = `第 ${i+1}/${total} 张完成 (${parsed.rows.length} 行)`;
+
+    } catch(err) {
+      allOk = false;
+      progressLabel.textContent = `第 ${i+1} 张失败: ${err.message}`;
+      if(err.message.includes('fetch') || err.message.includes('Failed') || err.message.includes('NetworkError') || err.message.includes('aborted')) {
+        toast('无法连接本地 OCR 服务', 'error');
+        checkConnection();
+        break;
+      } else {
+        toast(`第 ${i+1} 张识别失败: ${err.message}`, 'error');
+      }
+      console.error('OCR Error:', err);
     }
+  }
 
-    setStep(2);
-    progressLabel.textContent = '正在使用 macOS Vision 识别文字（高质量中文 OCR）…';
-    progressFill.style.width = '30%';
+  // Finalize
+  progressFill.style.width = '100%';
+  if(tableData.length > 0) {
+    progressLabel.textContent = `完成！共 ${total} 张图片，识别到 ${tableData.length} 行 × ${headers.length} 列`;
+  } else {
+    progressLabel.textContent = '未识别到有效表格数据';
+  }
 
-    // POST to backend
-    const formData = new FormData();
-    formData.append('image', blob, uploadedFile?.name || 'image.png');
+  setTimeout(() => {
+    processing.classList.remove('active');
+    workspace.classList.add('active');
+    document.getElementById('scanLine').classList.remove('active');
+    renderTable();
+    updateStats();
+  }, 500);
+}
 
-    const resp = await fetch(OCR_API + '/api/ocr', {
-      method: 'POST',
-      body: formData
+// Merge parsed table data into existing table
+function mergeTableData(parsed) {
+  if(parsed.rows.length === 0) return;
+
+  // Build column mapping: parsed.headers → existing headers
+  const colMap = [];  // parsed col index → target header name
+
+  for(const ph of parsed.headers) {
+    const lc = ph.toLowerCase().trim();
+    const matchIdx = headers.findIndex(h => h.toLowerCase().trim() === lc);
+    if(matchIdx >= 0) {
+      colMap.push(headers[matchIdx]);
+    } else {
+      // New column - generate unique name
+      let newName = ph || ('列' + (headers.length + 1));
+      let finalName = newName;
+      let suffix = 1;
+      while(headers.includes(finalName)) {
+        suffix++;
+        finalName = newName + '_' + suffix;
+      }
+      headers.push(finalName);
+      colMap.push(finalName);
+    }
+  }
+
+  // Append parsed rows
+  for(const prow of parsed.rows) {
+    const newRow = {};
+    headers.forEach(h => { newRow[h] = ''; });
+    parsed.headers.forEach((ph, i) => {
+      newRow[colMap[i]] = prow[ph] || '';
     });
-
-    if(!resp.ok) {
-      const errData = await resp.json().catch(() => ({error: resp.statusText}));
-      throw new Error(errData.error || `HTTP ${resp.status}`);
-    }
-
-    const data = await resp.json();
-    progressFill.style.width = '80%';
-
-    if(!data.lines || data.lines.length === 0) {
-      throw new Error('未识别到任何文字内容');
-    }
-
-    setStep(3);
-    progressFill.style.width = '90%';
-    progressLabel.textContent = `已识别 ${data.count} 行，正在解析表格结构…`;
-
-    // Parse lines into table
-    const userCols = parseInt(document.getElementById('colCountInput').value) || 0;
-    const parsed = parseLinesToTable(data.lines, userCols);
-    headers = parsed.headers;
-    tableData = parsed.rows;
-    ocrConfidence = 0;
-
-    setStep(4);
-    progressFill.style.width = '100%';
-    progressLabel.textContent = `完成！识别到 ${tableData.length} 行 × ${headers.length} 列`;
-
-    setTimeout(() => {
-      processing.classList.remove('active');
-      workspace.classList.add('active');
-      document.getElementById('scanLine').classList.remove('active');
-      renderTable();
-      updateStats();
-    }, 500);
-
-  } catch(err) {
-    progressLabel.textContent = '识别失败: ' + err.message;
-    progressFill.style.width = '100%';
-    progressFill.style.background = 'var(--red)';
-    if(err.message.includes('fetch') || err.message.includes('Failed') || err.message.includes('NetworkError') || err.message.includes('aborted')) {
-      toast('无法连接本地 OCR 服务，请确保已运行 python3 server.py', 'error');
-      checkConnection();
-    } else {
-      toast('OCR 识别失败: ' + err.message, 'error');
-    }
-    console.error('OCR Error:', err);
-    setTimeout(() => { progressFill.style.background = ''; }, 2000);
+    tableData.push(newRow);
   }
 }
 

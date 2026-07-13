@@ -861,57 +861,87 @@ function correctOcrText(text) {
   return result;
 }
 
-// ─── Lightweight post-processing: keep only needed columns, fill missing with / ───
+// ─── Content-based column assignment: match values by type, not position ───
 function normalizeTable() {
   if(tableData.length === 0) return;
 
   const oldHeaders = [...headers];
-  const keepCols = ['商品代码', '商品名称', '现售价', '现会员价', '生效日期'];
+  const TARGET = ['商品代码', '商品名称', '现售价', '现会员价', '生效日期'];
 
-  // Try to map old headers to new ones by position or name
-  const mapping = keepCols.map((newName, i) => {
-    // First try: exact match by name
-    const exact = oldHeaders.findIndex(h => h.trim() === newName);
-    if(exact >= 0) return exact;
-    // Second try: positional (col 0→商品代码, col 1→商品名称, etc.)
-    // But different OCR outputs have different column orders
-    // Use heuristics:
-    if(newName === '商品代码') {
-      const idx = oldHeaders.findIndex(h => /代码/.test(h) || /^\d{5,6}$/.test(h));
-      return idx >= 0 ? idx : 0;
-    }
-    if(newName === '商品名称') {
-      const idx = oldHeaders.findIndex(h => /名称|品名/.test(h));
-      return idx >= 0 ? idx : 1;
-    }
-    if(newName === '现售价') {
-      const idx = oldHeaders.findIndex(h => /现售|售价/.test(h) && !/会员/.test(h));
-      return idx >= 0 ? idx : 3;
-    }
-    if(newName === '现会员价') {
-      const idx = oldHeaders.findIndex(h => /现会员|会员价/.test(h));
-      return idx >= 0 ? idx : 5;
-    }
-    if(newName === '生效日期') {
-      const idx = oldHeaders.findIndex(h => /日期|生效|时间/.test(h));
-      return idx >= 0 ? idx : Math.min(7, oldHeaders.length - 1);
-    }
-    return i;
-  });
-
-  // Remap rows
+  // Collect ALL values from each row into a flat pool, then classify and assign
   tableData = tableData.map(oldRow => {
-    const newRow = {};
-    for(let i = 0; i < keepCols.length; i++) {
-      const srcIdx = mapping[i];
-      const srcKey = srcIdx < oldHeaders.length ? oldHeaders[srcIdx] : null;
-      const val = srcKey ? (oldRow[srcKey] || '') : '';
-      newRow[keepCols[i]] = (val && val.toString().trim()) || '/';
+    // Gather all non-empty values from the row
+    const pool = [];
+    for(const h of oldHeaders) {
+      const v = (oldRow[h] || '').trim();
+      if(v && v !== '/' && v !== '-') {
+        // Split by newlines and spaces for merged cells
+        const parts = v.split(/[\n\\n]+/).map(s => s.trim()).filter(Boolean);
+        for(const p of parts) {
+          // Further split if there are multiple space-separated tokens that look like separate values
+          const tokens = p.split(/\s+/);
+          if(tokens.length >= 3 && tokens.some(t => /^\d{5,6}$/.test(t))) {
+            pool.push(...tokens);
+          } else {
+            pool.push(p);
+          }
+        }
+      }
     }
-    return newRow;
+
+    // Classify each value
+    const codes = [], names = [], prices = [], memberPrices = [], dates = [];
+
+    for(const val of pool) {
+      const v = val.trim();
+      if(!v) continue;
+
+      // 6-digit code
+      if(/^\d{5,6}$/.test(v) && parseInt(v) > 10000) {
+        codes.push(v);
+      }
+      // Date
+      else if(/\d+月\d+日/.test(v)) {
+        dates.push(v);
+      }
+      // Price: pure number with decimal, > 0.5
+      else if(/^[\d.]+$/.test(v) && parseFloat(v) > 0.5 && parseFloat(v) < 1000) {
+        prices.push(v);
+      }
+      // Price with 元
+      else if(/^\d+元/.test(v)) {
+        prices.push(v);
+      }
+      // Name: Chinese text, 3+ chars, not purely numeric
+      else if(/[\u4e00-\u9fff]/.test(v) && v.length >= 2 && !/^\d+$/.test(v)) {
+        names.push(v);
+      }
+      // Short alphanumeric → might be spec or noise, skip
+    }
+
+    // Build output row
+    const nr = {};
+    nr[TARGET[0]] = codes[0] || '/';
+    nr[TARGET[1]] = names.join(' ') || '/';
+
+    // Assign prices: first price → 现售价, second → 现会员价
+    // But if only one price, it's 现售价
+    const allPrices = [...prices];
+    nr[TARGET[2]] = allPrices[0] || '/';
+    nr[TARGET[3]] = allPrices[1] || (allPrices.length === 1 ? '/' : '/');
+
+    nr[TARGET[4]] = dates[0] || '/';
+
+    return nr;
   });
 
-  headers = keepCols;
+  // Filter out completely empty rows (all /)
+  tableData = tableData.filter(r => {
+    const vals = TARGET.map(h => r[h]);
+    return vals.some(v => v !== '/' && v !== '');
+  });
+
+  headers = TARGET;
 }
 
 function parseLinesToTable(lines, userCols) {

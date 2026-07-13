@@ -911,18 +911,49 @@ function correctOcrText(text) {
   return result;
 }
 
-// ─── Normalize: fill missing cells with /, apply OCR corrections ───
+// ─── Normalize: fill missing with /, fix dates in wrong columns, OCR corrections ───
 function normalizeTable() {
   if(tableData.length === 0) return;
 
   const TARGET = ['商品代码','商品名称','售卖单位','原售价','现售价','原会员价','现会员价','生效日期','门店区域','备注'];
+  const PRICE_COLS = ['原售价','现售价','原会员价','现会员价'];
 
   tableData = tableData.map(row => {
     const nr = {};
+
+    // First pass: collect all values
     for(const h of TARGET) {
-      const val = (row[h] || '').toString().trim();
+      nr[h] = (row[h] || '').toString().trim();
+    }
+
+    // Fix: move date patterns out of price columns into 生效日期
+    for(const pc of PRICE_COLS) {
+      const val = nr[pc];
+      if(val && /\d+月\d+日/.test(val)) {
+        if(nr['生效日期'] === '' || nr['生效日期'] === '/' || nr['生效日期'] === '-') {
+          nr['生效日期'] = val;
+        }
+        nr[pc] = '';
+      }
+    }
+
+    // Fix: move region patterns out of price columns into 门店区域
+    for(const pc of PRICE_COLS) {
+      const val = nr[pc];
+      if(val && /^(浙江|江苏|安徽|福建|广东|河南|湖南|全国|湖北|江西|上海|北京)/.test(val)) {
+        if(nr['门店区域'] === '' || nr['门店区域'] === '/' || nr['门店区域'] === '-') {
+          nr['门店区域'] = val;
+        }
+        nr[pc] = '';
+      }
+    }
+
+    // Finalize: fill empties with /
+    for(const h of TARGET) {
+      const val = nr[h];
       nr[h] = (val && val !== '-' && val !== '/') ? correctOcrText(val) : '/';
     }
+
     return nr;
   });
 

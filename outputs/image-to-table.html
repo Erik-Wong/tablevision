@@ -669,10 +669,10 @@ async function startOCR() {
   // Finalize
   progressFill.style.width = '100%';
 
-  // Post-process: smart header detection + data cleaning
+  // Post-process: smart header detection + normalize columns
   if(tableData.length > 0) {
     detectAndFixHeaders();
-    cleanTableData();
+    normalizeTable();
     updateStats();
   }
 
@@ -861,158 +861,134 @@ function correctOcrText(text) {
   return result;
 }
 
-// Clean and realign data after parsing
-function cleanTableData() {
+// ─── Final normalization: classify values by type, assign to correct columns ───
+function normalizeTable() {
   if(tableData.length === 0 || headers.length < 3) return;
 
   const hCode = headers[0], hName = headers[1], hUnit = headers[2];
-  const hDate = headers.length > 7 ? headers[7] : null;
-  const hRegion = headers.length > 8 ? headers[8] : null;
-  const hNote = headers[headers.length - 1];
-  const priceHeaders = headers.slice(3, 7); // col3-6 are usually prices
-  const col9 = headers.length > 9 ? headers[9] : hNote;
+  const priceHs = headers.slice(3, 7);
+  const hDate = headers[7], hRegion = headers[8], hNote = headers[9] || headers[headers.length-1];
+
+  // Clean header names
+  headers[0] = '商品代码';
+  headers[1] = '商品名称';
+  headers[2] = '售卖单位';
+  if(headers[3]) headers[3] = '原售价';
+  if(headers[4]) headers[4] = '现售价';
+  if(headers[5]) headers[5] = '原会员价';
+  if(headers[6]) headers[6] = '现会员价';
+  if(headers[7]) headers[7] = '生效日期';
+  if(headers[8]) headers[8] = '门店区域';
+  if(headers[9]) headers[9] = '备注';
+
+  const UNIT_SET = new Set(['公斤','kg','KG','Kg','瓶','盒','袋','包','条','罐','桶','排',
+    '支','提','连包','板','箱','个','杯','瓶装','罐装','盒装','袋装','1*2kg','1x2kg','142kg',
+    '1*4瓶*6排','220g*4*6板','220g*4瓶*6排','↑']);
+
+  const newRows = [];
 
   for(const row of tableData) {
-    // Apply OCR corrections to all cells first
-    for(const h of headers) { if(row[h]) row[h] = correctOcrText(row[h]); }
-
-    const nameVal = (row[hName] || '').trim();
-    const unitVal = (row[hUnit] || '').trim();
-    const noteVal = (row[hNote] || '').trim();
-    const col9Val = (row[col9] || '').trim();
-
-    // ── Fix 1: Parse semicolon-dumped values from col9/note back to proper columns ──
-    const dumpTarget = col9Val || noteVal;
-    if(dumpTarget && dumpTarget.includes(';') && dumpTarget.split(';').length >= 2) {
-      const parts = dumpTarget.split(';').map(s => s.trim()).filter(Boolean);
-      let redistributed = false;
-      for(const part of parts) {
-        if(/^\d+月\d+日/.test(part) || /^\d+年\d+月/.test(part)) {
-          if(hDate && (!row[hDate] || !row[hDate].includes(part))) {
-            row[hDate] = row[hDate] ? row[hDate] + '; ' + part : part;
-            redistributed = true;
-          }
-        } else if(/^[\d.]+$/.test(part) || /^\d+元/.test(part)) {
-          // Price → find first empty price column
-          for(const ph of priceHeaders) {
-            if(!row[ph] || row[ph].trim() === '') {
-              row[ph] = part; redistributed = true; break;
-            }
-          }
-        } else if(/省|市|全国|区域|门店/.test(part) && part.length < 30) {
-          if(hRegion && (!row[hRegion] || !row[hRegion].includes(part))) {
-            row[hRegion] = row[hRegion] ? row[hRegion] + '; ' + part : part;
-            redistributed = true;
-          }
-        } else if(/^\d{5,6}$/.test(part)) {
-          if(!row[hCode] || row[hCode].trim() === '') {
-            row[hCode] = part; redistributed = true;
-          }
-        } else if(/取消|新增|特价|折扣|统一|老品|同步|打印|促销|会员/.test(part)) {
-          // Keep in notes
-        }
-      }
-      if(redistributed) {
-        // Clean up note/col9 - keep only non-redistributed parts
-        const remaining = parts.filter(p => {
-          if(/^\d+月\d+日/.test(p)) return false;
-          if(/^[\d.]+$/.test(p)) return false;
-          if(/^\d{5,6}$/.test(p)) return false;
-          if(/省|市|全国|区域|门店/.test(p) && p.length < 30) return false;
-          return true;
-        });
-        const cleaned = remaining.join('; ');
-        if(col9Val) row[col9] = cleaned;
-        if(noteVal && col9 !== hNote) row[hNote] = cleaned;
+    // Collect all values into flat list with original column info
+    const items = [];
+    for(const h of headers) {
+      const v = (row[h] || '').trim();
+      if(v && v !== '-' && v !== '/') {
+        items.push(v);
       }
     }
 
-    // ── Fix 2: Split merged rows (code+name+unit+price all in col1) ──
-    const mergedVal = (row[hName] || '').trim();
-    if(mergedVal && !/^[\d.]+$/.test(nameVal) && nameVal.split(/\s+/).length >= 3) {
-      const tokens = mergedVal.split(/\s+/);
-      let hasCode = false, hasPrice = false, hasUnit = false;
-      
-      // Try to extract code (5-6 digit number)
-      for(let i = 0; i < tokens.length; i++) {
-        if(/^\d{5,6}$/.test(tokens[i]) && !row[hCode]) {
-          row[hCode] = tokens[i]; tokens[i] = ''; hasCode = true; break;
-        }
-      }
-      
-      // Try to extract unit
-      for(let i = 0; i < tokens.length; i++) {
-        if(tokens[i] && UNIT_WORDS.some(u => tokens[i] === u || tokens[i].toLowerCase() === u.toLowerCase())) {
-          if(!row[hUnit] || row[hUnit].trim() === '' || row[hUnit].trim() === '-') {
-            row[hUnit] = tokens[i]; tokens[i] = ''; hasUnit = true; break;
-          }
-        }
-      }
+    if(items.length === 0) continue;
 
-      // Try to extract prices (numeric with decimal)
-      for(let i = 0; i < tokens.length; i++) {
-        if(tokens[i] && /^\d+\.?\d*$/.test(tokens[i]) && parseFloat(tokens[i]) > 0.1) {
-          for(const ph of priceHeaders) {
-            if(!row[ph] || row[ph].trim() === '' || row[ph].trim() === '-') {
-              row[ph] = tokens[i]; tokens[i] = ''; hasPrice = true; break;
-            }
-          }
-        }
-      }
+    // Classify each item
+    const classified = { code: [], name: [], unit: [], prices: [], dates: [], regions: [], notes: [] };
 
-      // Try to extract date
-      for(let i = 0; i < tokens.length; i++) {
-        if(tokens[i] && /\d+月\d+日/.test(tokens[i])) {
-          if(hDate && !row[hDate]) { row[hDate] = tokens[i]; tokens[i] = ''; }
-        }
-      }
+    for(const item of items) {
+      // Split by semicolons for already-dumped data, then classify each part
+      const subItems = item.includes(';') ? item.split(';').map(s => s.trim()).filter(Boolean) : [item];
 
-      if(hasCode || hasPrice || hasUnit) {
-        row[hName] = tokens.filter(Boolean).join(' ');
+      for(const si of subItems) {
+        if(!si) continue;
+
+        // CODE: 5-6 digit number (not a price)
+        if(/^\d{5,6}$/.test(si)) {
+          classified.code.push(si);
+        }
+        // DATE
+        else if(/^\d+月\d+日/.test(si) || /^\d+年\d+月/.test(si) || /^\d+[\/]\d+$/.test(si)) {
+          classified.dates.push(si);
+        }
+        // UNIT
+        else if(UNIT_SET.has(si)) {
+          classified.unit.push(si);
+        }
+        // PRICE: numeric, or "X元/Y" pattern
+        else if(/^[\d.]+$/.test(si) || /^\d+元\/?\d*/.test(si) || /^[\d.]+\s*\/$/.test(si) || /^\/\s*[\d.]+$/.test(si)) {
+          // Clean / prefix/suffix
+          let clean = si.replace(/^\s*\/\s*/, '').replace(/\s*\/\s*$/, '');
+          if(clean && /^[\d.]+$/.test(clean)) classified.prices.push(clean);
+          else if(/^\d+元/.test(si)) classified.prices.push(si);
+        }
+        // REGION: contains location keywords, short
+        else if((/省|市|全国|区域|门店|浙江|江苏|安徽|福建|广东|河南|湖南/.test(si)) && si.length < 35) {
+          classified.regions.push(si);
+        }
+        // NOTE: contains status keywords
+        else if(/取消|新增|特价|折扣|统一|老品|同步|打印|促销|会员|参与|价格/.test(si) && si.length < 30) {
+          classified.notes.push(si);
+        }
+        // Otherwise → probably product name (longest text)
+        else {
+          classified.name.push(si);
+        }
       }
     }
 
-    // ── Fix 3: Don't move values with / (like "2.2 /") to notes ──
-    for(const ph of priceHeaders) {
-      const val = (row[ph] || '').trim();
-      // Skip: pure numbers, numbers with /, empty, single /
-      if(!val || /^[\d.]+$/.test(val) || /^[\d.]+\s*\/$/.test(val) || val === '/' || val === '-') continue;
-      // Skip: known text that indicates a valid value
-      if(/^\d+元/.test(val)) continue;
-      
-      // Move only clearly non-price text to notes
-      if(val.length > 0 && !/\d/.test(val) && !/^[\/\-]+$/.test(val)) {
-        if(row[hNote]) row[hNote] = row[hNote] + '; ' + val;
-        else row[hNote] = val;
-        row[ph] = '';
-      }
+    // Clean: remove price-like values from name
+    classified.name = classified.name.filter(n => !/^[\d.]+$/.test(n) && !/^\d+元/.test(n));
+    // Clean: remove very short tokens from name (likely noise)
+    classified.name = classified.name.filter(n => n.length > 1 || /[一-鿿]/.test(n));
+
+    // Build the normalized row
+    const nr = {};
+    nr[hCode] = classified.code[0] || '/';
+    nr[hName] = classified.name.join(' ') || '/';
+    nr[hUnit] = classified.unit[0] || '/';
+
+    // Prices
+    for(let i = 0; i < priceHs.length; i++) {
+      nr[priceHs[i]] = classified.prices[i] || (i === 0 && classified.prices.length === 0 ? '/' : '');
     }
 
-    // ── Fix 4: Extract unit from name column (unit word at end/beginning) ──
-    const curName = (row[hName] || '').trim();
-    const curUnit = (row[hUnit] || '').trim();
-    if(curName && (!curUnit || curUnit === '-' || curUnit === '')) {
+    nr[hDate] = classified.dates[0] || '/';
+    nr[hRegion] = classified.regions.join('; ') || '/';
+    nr[hNote] = classified.notes.join('; ') || '';
+
+    // Merge leftover items into notes
+    const allClassified = [...classified.code, ...classified.name, ...classified.unit,
+      ...classified.prices, ...classified.dates, ...classified.regions, ...classified.notes];
+    const leftover = items.filter(it => !allClassified.some(ac => it.includes(ac) || ac.includes(it)));
+    if(leftover.length > 0 && nr[hNote]) {
+      nr[hNote] = nr[hNote] + '; ' + leftover.join('; ');
+    } else if(leftover.length > 0) {
+      nr[hNote] = leftover.join('; ');
+    }
+
+    // Ensure name column doesn't start with unit word
+    const nameVal = nr[hName];
+    if(nameVal && nameVal !== '/') {
       for(const uw of UNIT_WORDS) {
-        if(curName.endsWith(' ' + uw) || curName.endsWith(uw)) {
-          const idx = curName.lastIndexOf(uw);
-          if(idx > 0) {
-            row[hName] = curName.substring(0, idx).trim();
-            row[hUnit] = uw;
-            break;
-          }
+        if(nameVal.startsWith(uw + ' ')) {
+          nr[hName] = nameVal.substring(uw.length + 1);
+          if(nr[hUnit] === '/') nr[hUnit] = uw;
+          break;
         }
       }
     }
 
-    // ── Fix 5: OCR space fix - "面 包" → "面包" ──
-    for(const h of [hName]) {
-      if(row[h]) {
-        row[h] = row[h].replace(/面\s+包/g, '面包').replace(/新\s+装/g, '新装')
-                       .replace(/罐\s+装/g, '罐装').replace(/瓶\s+装/g, '瓶装')
-                       .replace(/散\s+称/g, '散称').replace(/五连\s+包/g, '五连包');
-      }
-    }
+    newRows.push(nr);
   }
+
+  tableData = newRows;
 }
 
 function parseLinesToTable(lines, userCols) {

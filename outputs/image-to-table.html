@@ -865,83 +865,152 @@ function correctOcrText(text) {
 function cleanTableData() {
   if(tableData.length === 0 || headers.length < 3) return;
 
-  const nameCol = 1;   // 商品名称 column index
-  const unitCol = 2;   // 售卖单位 column index  
-  const priceCols = [3, 4, 5, 6]; // Price columns
-  const noteCol = headers.length - 1; // Last column as notes
-  const hName = headers[nameCol];
-  const hUnit = headers[unitCol];
-  const hNote = headers[noteCol];
+  const hCode = headers[0], hName = headers[1], hUnit = headers[2];
+  const hDate = headers.length > 7 ? headers[7] : null;
+  const hRegion = headers.length > 8 ? headers[8] : null;
+  const hNote = headers[headers.length - 1];
+  const priceHeaders = headers.slice(3, 7); // col3-6 are usually prices
+  const col9 = headers.length > 9 ? headers[9] : hNote;
 
   for(const row of tableData) {
+    // Apply OCR corrections to all cells first
+    for(const h of headers) { if(row[h]) row[h] = correctOcrText(row[h]); }
+
     const nameVal = (row[hName] || '').trim();
     const unitVal = (row[hUnit] || '').trim();
-    
-    // Fix 1: Unit word leaked into name column → extract and shift
-    for(const unitWord of UNIT_WORDS) {
-      const lowerName = nameVal.toLowerCase();
-      const lowerUnit = unitWord.toLowerCase();
-      const idx = lowerName.indexOf(lowerUnit);
-      if(idx >= 0 || nameVal.startsWith(unitWord)) {
-        // Found unit in name, extract it
-        let newName = nameVal;
-        let extractedUnit = unitWord;
-        
-        if(nameVal.startsWith(unitWord + ' ')) {
-          newName = nameVal.substring(unitWord.length + 1);
-        } else if(nameVal.endsWith(' ' + unitWord)) {
-          newName = nameVal.substring(0, nameVal.length - unitWord.length - 1);
-        } else if(nameVal === unitWord) {
-          newName = '';
-        } else if(idx >= 0) {
-          // Unit is embedded - extract and clean
-          const before = nameVal.substring(0, idx).trim();
-          const after = nameVal.substring(idx + unitWord.length).trim();
-          newName = (before + ' ' + after).trim();
-        }
+    const noteVal = (row[hNote] || '').trim();
+    const col9Val = (row[col9] || '').trim();
 
-        if(newName !== nameVal) {
-          row[hName] = newName;
-          // Shift: move old unit value to next column, push everything right
-          const oldUnit = unitVal;
-          row[hUnit] = extractedUnit;
-          // Shift price columns right if old unit looked like a price
-          if(oldUnit && /^[\d.]+$/.test(oldUnit)) {
-            // old "unit" was actually a price → shift all price cols right
-            for(let p = priceCols.length - 1; p > 0; p--) {
-              const curH = headers[priceCols[p]];
-              const prevH = headers[priceCols[p-1]];
-              if(!row[curH] || row[curH].trim() === '') {
-                row[curH] = row[prevH] || '';
-                row[prevH] = '';
-              }
+    // ── Fix 1: Parse semicolon-dumped values from col9/note back to proper columns ──
+    const dumpTarget = col9Val || noteVal;
+    if(dumpTarget && dumpTarget.includes(';') && dumpTarget.split(';').length >= 2) {
+      const parts = dumpTarget.split(';').map(s => s.trim()).filter(Boolean);
+      let redistributed = false;
+      for(const part of parts) {
+        if(/^\d+月\d+日/.test(part) || /^\d+年\d+月/.test(part)) {
+          if(hDate && (!row[hDate] || !row[hDate].includes(part))) {
+            row[hDate] = row[hDate] ? row[hDate] + '; ' + part : part;
+            redistributed = true;
+          }
+        } else if(/^[\d.]+$/.test(part) || /^\d+元/.test(part)) {
+          // Price → find first empty price column
+          for(const ph of priceHeaders) {
+            if(!row[ph] || row[ph].trim() === '') {
+              row[ph] = part; redistributed = true; break;
             }
-            row[hUnit] = extractedUnit;
+          }
+        } else if(/省|市|全国|区域|门店/.test(part) && part.length < 30) {
+          if(hRegion && (!row[hRegion] || !row[hRegion].includes(part))) {
+            row[hRegion] = row[hRegion] ? row[hRegion] + '; ' + part : part;
+            redistributed = true;
+          }
+        } else if(/^\d{5,6}$/.test(part)) {
+          if(!row[hCode] || row[hCode].trim() === '') {
+            row[hCode] = part; redistributed = true;
+          }
+        } else if(/取消|新增|特价|折扣|统一|老品|同步|打印|促销|会员/.test(part)) {
+          // Keep in notes
+        }
+      }
+      if(redistributed) {
+        // Clean up note/col9 - keep only non-redistributed parts
+        const remaining = parts.filter(p => {
+          if(/^\d+月\d+日/.test(p)) return false;
+          if(/^[\d.]+$/.test(p)) return false;
+          if(/^\d{5,6}$/.test(p)) return false;
+          if(/省|市|全国|区域|门店/.test(p) && p.length < 30) return false;
+          return true;
+        });
+        const cleaned = remaining.join('; ');
+        if(col9Val) row[col9] = cleaned;
+        if(noteVal && col9 !== hNote) row[hNote] = cleaned;
+      }
+    }
+
+    // ── Fix 2: Split merged rows (code+name+unit+price all in col1) ──
+    const mergedVal = (row[hName] || '').trim();
+    if(mergedVal && !/^[\d.]+$/.test(nameVal) && nameVal.split(/\s+/).length >= 3) {
+      const tokens = mergedVal.split(/\s+/);
+      let hasCode = false, hasPrice = false, hasUnit = false;
+      
+      // Try to extract code (5-6 digit number)
+      for(let i = 0; i < tokens.length; i++) {
+        if(/^\d{5,6}$/.test(tokens[i]) && !row[hCode]) {
+          row[hCode] = tokens[i]; tokens[i] = ''; hasCode = true; break;
+        }
+      }
+      
+      // Try to extract unit
+      for(let i = 0; i < tokens.length; i++) {
+        if(tokens[i] && UNIT_WORDS.some(u => tokens[i] === u || tokens[i].toLowerCase() === u.toLowerCase())) {
+          if(!row[hUnit] || row[hUnit].trim() === '' || row[hUnit].trim() === '-') {
+            row[hUnit] = tokens[i]; tokens[i] = ''; hasUnit = true; break;
           }
         }
-        break;
       }
-    }
 
-    // Fix 2: Text in price columns → move to notes
-    for(const pcol of priceCols) {
-      if(pcol >= headers.length) break;
-      const h = headers[pcol];
-      const val = (row[h] || '').trim();
-      if(val.length > 0 && !/^[\d./]+$/.test(val) && !/^\d+[元]/.test(val)) {
-        // Text in price column - move to notes
-        if(row[hNote]) {
-          row[hNote] = row[hNote] + '; ' + val;
-        } else {
-          row[hNote] = val;
+      // Try to extract prices (numeric with decimal)
+      for(let i = 0; i < tokens.length; i++) {
+        if(tokens[i] && /^\d+\.?\d*$/.test(tokens[i]) && parseFloat(tokens[i]) > 0.1) {
+          for(const ph of priceHeaders) {
+            if(!row[ph] || row[ph].trim() === '' || row[ph].trim() === '-') {
+              row[ph] = tokens[i]; tokens[i] = ''; hasPrice = true; break;
+            }
+          }
         }
-        row[h] = '';
+      }
+
+      // Try to extract date
+      for(let i = 0; i < tokens.length; i++) {
+        if(tokens[i] && /\d+月\d+日/.test(tokens[i])) {
+          if(hDate && !row[hDate]) { row[hDate] = tokens[i]; tokens[i] = ''; }
+        }
+      }
+
+      if(hasCode || hasPrice || hasUnit) {
+        row[hName] = tokens.filter(Boolean).join(' ');
       }
     }
 
-    // Fix 3: Apply OCR corrections to all cells
-    for(const h of headers) {
-      if(row[h]) row[h] = correctOcrText(row[h]);
+    // ── Fix 3: Don't move values with / (like "2.2 /") to notes ──
+    for(const ph of priceHeaders) {
+      const val = (row[ph] || '').trim();
+      // Skip: pure numbers, numbers with /, empty, single /
+      if(!val || /^[\d.]+$/.test(val) || /^[\d.]+\s*\/$/.test(val) || val === '/' || val === '-') continue;
+      // Skip: known text that indicates a valid value
+      if(/^\d+元/.test(val)) continue;
+      
+      // Move only clearly non-price text to notes
+      if(val.length > 0 && !/\d/.test(val) && !/^[\/\-]+$/.test(val)) {
+        if(row[hNote]) row[hNote] = row[hNote] + '; ' + val;
+        else row[hNote] = val;
+        row[ph] = '';
+      }
+    }
+
+    // ── Fix 4: Extract unit from name column (unit word at end/beginning) ──
+    const curName = (row[hName] || '').trim();
+    const curUnit = (row[hUnit] || '').trim();
+    if(curName && (!curUnit || curUnit === '-' || curUnit === '')) {
+      for(const uw of UNIT_WORDS) {
+        if(curName.endsWith(' ' + uw) || curName.endsWith(uw)) {
+          const idx = curName.lastIndexOf(uw);
+          if(idx > 0) {
+            row[hName] = curName.substring(0, idx).trim();
+            row[hUnit] = uw;
+            break;
+          }
+        }
+      }
+    }
+
+    // ── Fix 5: OCR space fix - "面 包" → "面包" ──
+    for(const h of [hName]) {
+      if(row[h]) {
+        row[h] = row[h].replace(/面\s+包/g, '面包').replace(/新\s+装/g, '新装')
+                       .replace(/罐\s+装/g, '罐装').replace(/瓶\s+装/g, '瓶装')
+                       .replace(/散\s+称/g, '散称').replace(/五连\s+包/g, '五连包');
+      }
     }
   }
 }

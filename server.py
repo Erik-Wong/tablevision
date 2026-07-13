@@ -11,10 +11,10 @@ OCR_BIN = BASE_DIR / 'ocr'
 FRONTEND = BASE_DIR / 'outputs' / 'image-to-table.html'
 CN_FONT = '/System/Library/Fonts/STHeiti Medium.ttc'
 
-# AI API config (OpenAI compatible)
+# AI API config (DeepSeek by default, OpenAI compatible)
 AI_API_KEY = os.environ.get('OPENAI_API_KEY', '')
-AI_BASE_URL = os.environ.get('OPENAI_BASE_URL', 'https://api.openai.com/v1')
-AI_MODEL = os.environ.get('AI_MODEL', 'gpt-4o-mini')
+AI_BASE_URL = os.environ.get('OPENAI_BASE_URL', 'https://api.deepseek.com/v1')
+AI_MODEL = os.environ.get('AI_MODEL', 'deepseek-chat')
 
 def parse_multipart(body, boundary):
     """Simple multipart/form-data parser"""

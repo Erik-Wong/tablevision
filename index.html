@@ -668,6 +668,12 @@ async function startOCR() {
 
   // Finalize
   progressFill.style.width = '100%';
+
+  // Post-process: remove duplicate header rows from data
+  if(tableData.length > 0 && headers.length > 0) {
+    cleanDuplicateHeaders();
+  }
+
   if(tableData.length > 0) {
     progressLabel.textContent = `完成！共 ${total} 张图片，识别到 ${tableData.length} 行 × ${headers.length} 列`;
   } else {
@@ -715,6 +721,39 @@ function appendImageData(lines, userCols) {
     });
     tableData.push(row);
   }
+}
+
+// Remove rows that are duplicate headers (appear as data due to OCR)
+function cleanDuplicateHeaders() {
+  const headerSet = new Set(headers.map(h => h.trim().toLowerCase()));
+  
+  // Build a signature for the header row values
+  const headerSig = headers.map(h => h.trim().toLowerCase()).join('|');
+  
+  tableData = tableData.filter(row => {
+    const vals = headers.map(h => (row[h] || '').trim().toLowerCase());
+    const rowSig = vals.join('|');
+    
+    // Exact match with header signature → remove
+    if(rowSig === headerSig) return false;
+    
+    // If row values are a subset/superset of headers → likely a header row
+    let matchCount = 0;
+    for(const v of vals) {
+      if(v.length > 0 && headerSet.has(v)) matchCount++;
+      else if(v.length > 0) {
+        // Check partial match (e.g., "商品名称" matches "商品名称 ")
+        for(const h of headerSet) {
+          if(h.includes(v) || v.includes(h)) { matchCount++; break; }
+        }
+      }
+    }
+    const nonEmpty = vals.filter(v => v.length > 0).length;
+    // If more than 60% of non-empty cells match headers, treat as header row
+    if(nonEmpty > 0 && matchCount >= nonEmpty * 0.6) return false;
+    
+    return true;
+  });
 }
 
 function setStep(n) {

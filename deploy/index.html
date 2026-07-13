@@ -666,7 +666,7 @@ async function startOCR() {
             const aiData = await aiResp.json();
             if(aiData.rows && aiData.rows.length > 0) {
               // AI returns rows with correct column names already
-              parsed = { headers: ['商品代码','商品名称','售卖单位','原售价','现售价','原会员价','现会员价','生效日期','门店区域','备注'], rows: aiData.rows };
+              parsed = { headers: ['商品代码','商品名称','现售价','现会员价','生效日期'], rows: aiData.rows };
               progressLabel.textContent = `第 ${i+1}/${total} 张完成 (AI: ${aiData.rows.length} 行)`;
             } else {
               throw new Error('AI returned empty');
@@ -777,7 +777,7 @@ function appendImageData(lines, userCols) {
 
 // Smart header detection: only run if headers don't match expected format
 function detectAndFixHeaders() {
-  const TARGET = ['商品代码','商品名称','售卖单位','原售价','现售价','原会员价','现会员价','生效日期','门店区域','备注'];
+  const TARGET = ['商品代码','商品名称','现售价','现会员价','生效日期'];
   // If headers already match target, skip
   if(headers.length === TARGET.length && headers.every((h,i) => h === TARGET[i])) {
     return;
@@ -920,8 +920,8 @@ function correctOcrText(text) {
 function normalizeTable() {
   if(tableData.length === 0) return;
 
-  const TARGET = ['商品代码','商品名称','售卖单位','原售价','现售价','原会员价','现会员价','生效日期','门店区域','备注'];
-  const PRICE_COLS = ['原售价','现售价','原会员价','现会员价'];
+  const TARGET = ['商品代码','商品名称','现售价','现会员价','生效日期'];
+  const PRICE_COLS = ['现售价','现会员价'];
 
   tableData = tableData.map(row => {
     const nr = {};

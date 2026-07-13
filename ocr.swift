@@ -219,126 +219,150 @@ for i in 0..<(merged.count - 1) {
 
 log("Non-empty rows: \(detectedRows.count)")
 
-// ─── Step 3: K-Means Column Detection ───
+// ─── Step 3: Vertical Projection Column Detection ───
+// Build a vertical occupancy map: for each X bin, count how many rows have text there
+let colBins = 800
+var vertProj = [Int](repeating: 0, count: colBins)
 
-// Collect all X-center positions (weighted — each text item)
-var xPositions: [CGFloat] = []
 for row in detectedRows {
+    var rowCoverage = [Bool](repeating: false, count: colBins)
     for item in row.items {
-        xPositions.append(item.cx)
-    }
-}
-
-// Try different K values and pick the best using elbow method
-func kmeans(data: [CGFloat], k: Int, maxIter: Int = 30) -> ([Int], [CGFloat]) {
-    guard data.count >= k, k > 0 else { return ([], []) }
-
-    // Initialize centroids evenly spaced
-    let sorted = data.sorted()
-    var centroids: [CGFloat] = []
-    for i in 0..<k {
-        let idx = i * (sorted.count - 1) / max(k - 1, 1)
-        centroids.append(sorted[idx])
-    }
-
-    var assignments = [Int](repeating: 0, count: data.count)
-
-    for _ in 0..<maxIter {
-        // Assign each point to nearest centroid
-        var changed = false
-        for i in 0..<data.count {
-            var bestDist = CGFloat.infinity
-            var bestCluster = 0
-            for c in 0..<k {
-                let dist = abs(data[i] - centroids[c])
-                if dist < bestDist {
-                    bestDist = dist
-                    bestCluster = c
-                }
-            }
-            if assignments[i] != bestCluster {
-                assignments[i] = bestCluster
-                changed = true
-            }
-        }
-        if !changed { break }
-
-        // Update centroids
-        var sums = [CGFloat](repeating: 0, count: k)
-        var counts = [Int](repeating: 0, count: k)
-        for i in 0..<data.count {
-            sums[assignments[i]] += data[i]
-            counts[assignments[i]] += 1
-        }
-        for c in 0..<k {
-            if counts[c] > 0 { centroids[c] = sums[c] / CGFloat(counts[c]) }
+        let l = Int(item.left * CGFloat(colBins))
+        let r = Int(item.right * CGFloat(colBins))
+        for b in max(0, l)...min(colBins-1, r) {
+            rowCoverage[b] = true
         }
     }
-
-    return (assignments, centroids)
-}
-
-func calculateWSS(data: [CGFloat], assignments: [Int], centroids: [CGFloat]) -> Double {
-    var wss: Double = 0
-    for i in 0..<data.count {
-        let dx = Double(data[i] - centroids[assignments[i]])
-        wss += dx * dx
+    for b in 0..<colBins {
+        if rowCoverage[b] { vertProj[b] += 1 }
     }
-    return wss
 }
 
-// Determine optimal K using elbow method (simplified)
-let maxK = min(12, xPositions.count / 3)
-var bestK = 2
-var bestScore: Double = -.infinity
+// Find gaps: consecutive bins where occupancy is below threshold
+let totalRows = detectedRows.count
+let gapThreshold = max(1, totalRows / 6)  // at most 1/6 of rows can have text in a gap
 
-guard maxK >= 2 else {
-    // Too few items, single column
-    for row in detectedRows {
-        print(row.items.map { $0.text }.joined(separator: "\t"))
-    }
-    exit(0)
-}
-
-var wssValues: [Double] = []
-for k in 2...maxK {
-    let (assignments, centroids) = kmeans(data: xPositions, k: k)
-    guard !centroids.isEmpty else { continue }
-    let wss = calculateWSS(data: xPositions, assignments: assignments, centroids: centroids)
-    wssValues.append(wss)
-}
-
-// Elbow detection: find point where the rate of improvement drops most
-if wssValues.count >= 3 {
-    var maxGap: Double = 0
-    for i in 1..<(wssValues.count - 1) {
-        let improvement1 = wssValues[i-1] - wssValues[i]
-        let improvement2 = wssValues[i] - wssValues[i+1]
-        let gap = improvement1 - improvement2
-        if gap > maxGap {
-            maxGap = gap
-            bestK = i + 2  // +2 because i=0 corresponds to k=2
+var gaps: [(start: Int, end: Int)] = []
+var gapStart: Int? = nil
+for b in 0..<colBins {
+    if vertProj[b] <= gapThreshold {
+        if gapStart == nil { gapStart = b }
+    } else {
+        if let gs = gapStart, b - gs >= 3 {  // min gap width: 3 bins (~0.4% of width)
+            gaps.append((gs, b - 1))
         }
+        gapStart = nil
+    }
+}
+if let gs = gapStart, colBins - gs >= 3 {
+    gaps.append((gs, colBins - 1))
+}
+
+// Merge adjacent gaps that are close together
+var mergedGaps: [(start: Int, end: Int)] = []
+for gap in gaps {
+    if let last = mergedGaps.last, gap.start - last.end < 5 {
+        mergedGaps[mergedGaps.count - 1].end = gap.end
+    } else {
+        mergedGaps.append(gap)
     }
 }
 
-log("K-Means detected \(bestK) columns (k range 2-\(maxK))")
+// Filter: keep only significant gaps (wide enough, not at extreme edges)
+let minGapWidth = 6  // ~0.75% of image width
+let edgeMargin = 8
+let validGaps = mergedGaps.filter {
+    ($0.end - $0.start) >= minGapWidth &&
+    $0.start > edgeMargin &&
+    $0.end < colBins - edgeMargin
+}
 
-// Run final K-means with best K
-let (_, centroids) = kmeans(data: xPositions, k: bestK)
-let sortedCentroids = centroids.sorted()
-
-// Derive column boundaries as midpoints between adjacent cluster centers
+// Column boundaries are the midpoints of valid gaps
 var colBounds: [CGFloat] = [0.0]
-for i in 0..<(sortedCentroids.count - 1) {
-    let mid = (sortedCentroids[i] + sortedCentroids[i+1]) / 2.0
+for gap in validGaps {
+    let mid = CGFloat(gap.start + gap.end) / (2.0 * CGFloat(colBins))
     colBounds.append(mid)
 }
 colBounds.append(1.0)
 
-log("Column boundaries: \(colBounds.map { String(format: "%.3f", $0) })")
+// If too few columns found (vertical projection may fail for borderless tables),
+// fall back to K-Means
+if colBounds.count <= 2 && detectedRows.count >= 2 {
+    log("Vertical projection found \(colBounds.count - 1) gaps, falling back to K-Means")
+    
+    var xPositions: [CGFloat] = []
+    for row in detectedRows {
+        for item in row.items { xPositions.append(item.cx) }
+    }
+    
+    // Simple K-Means (reuse existing implementation)
+    func kmeans(data: [CGFloat], k: Int, maxIter: Int = 30) -> ([Int], [CGFloat]) {
+        guard data.count >= k, k > 0 else { return ([], []) }
+        let sorted = data.sorted()
+        var centroids: [CGFloat] = []
+        for i in 0..<k {
+            let idx = i * (sorted.count - 1) / max(k - 1, 1)
+            centroids.append(sorted[idx])
+        }
+        var assignments = [Int](repeating: 0, count: data.count)
+        for _ in 0..<maxIter {
+            var changed = false
+            for i in 0..<data.count {
+                var bestDist = CGFloat.infinity
+                var bestCluster = 0
+                for c in 0..<k {
+                    let dist = abs(data[i] - centroids[c])
+                    if dist < bestDist { bestDist = dist; bestCluster = c }
+                }
+                if assignments[i] != bestCluster { assignments[i] = bestCluster; changed = true }
+            }
+            if !changed { break }
+            var sums = [CGFloat](repeating: 0, count: k)
+            var counts = [Int](repeating: 0, count: k)
+            for i in 0..<data.count { sums[assignments[i]] += data[i]; counts[assignments[i]] += 1 }
+            for c in 0..<k { if counts[c] > 0 { centroids[c] = sums[c] / CGFloat(counts[c]) } }
+        }
+        return (assignments, centroids)
+    }
+    
+    func calculateWSS(data: [CGFloat], assignments: [Int], centroids: [CGFloat]) -> Double {
+        var wss: Double = 0
+        for i in 0..<data.count {
+            let dx = Double(data[i] - centroids[assignments[i]])
+            wss += dx * dx
+        }
+        return wss
+    }
+    
+    let maxK = min(10, xPositions.count / 3)
+    var bestK = 2
+    if maxK >= 3 {
+        var wssValues: [Double] = []
+        for k in 2...maxK {
+            let (a, c) = kmeans(data: xPositions, k: k)
+            if !c.isEmpty { wssValues.append(calculateWSS(data: xPositions, assignments: a, centroids: c)) }
+        }
+        if wssValues.count >= 3 {
+            var maxGap: Double = 0
+            for i in 1..<(wssValues.count - 1) {
+                let gap = (wssValues[i-1] - wssValues[i]) - (wssValues[i] - wssValues[i+1])
+                if gap > maxGap { maxGap = gap; bestK = i + 2 }
+            }
+        }
+    }
+    
+    let (_, centroids) = kmeans(data: xPositions, k: bestK)
+    let sortedC = centroids.sorted()
+    colBounds = [0.0]
+    for i in 0..<(sortedC.count - 1) {
+        colBounds.append((sortedC[i] + sortedC[i+1]) / 2.0)
+    }
+    colBounds.append(1.0)
+}
 
-let numCols = colBounds.count - 1
+let numCols = max(2, colBounds.count - 1)
+log("Column detection: \(numCols) columns (projection gaps: \(validGaps.count))")
+log("Column boundaries: \(colBounds.map { String(format: "%.3f", $0) })")
 
 // ─── Step 4: Grid Assignment & Multi-line Merging ───
 

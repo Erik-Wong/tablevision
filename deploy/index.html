@@ -292,6 +292,11 @@ body{font-family:var(--font);background:var(--bg-0);color:var(--text-1);min-heig
 
     <div class="settings-bar">
       <div class="setting-item">
+        <label>AI 智能识别</label>
+        <input type="checkbox" id="aiToggle" checked style="accent-color:var(--cyan)">
+        <span style="color:var(--text-4);font-size:.72rem">需配置 API Key</span>
+      </div>
+      <div class="setting-item">
         <label>列数</label>
         <input type="number" class="setting-input" id="colCountInput" value="0" min="0" max="20" step="1" title="0=自动检测">
         <span style="color:var(--text-4);font-size:.72rem">0=自动</span>
@@ -428,6 +433,7 @@ async function checkConnection() {
   const status = document.getElementById('connStatus');
   const label = document.getElementById('connLabel');
   const banner = document.getElementById('serviceBanner');
+  const aiToggle = document.getElementById('aiToggle');
 
   status.className = 'conn-status checking';
   label.textContent = '检测中…';
@@ -435,10 +441,20 @@ async function checkConnection() {
   try {
     const resp = await fetch(OCR_API + '/health', { signal: AbortSignal.timeout(3000) });
     if (resp.ok) {
+      const info = await resp.json();
       isLocalOnline = true;
       status.className = 'conn-status online';
       label.textContent = '本地服务已连接';
       banner.classList.remove('show');
+      // Update AI toggle
+      if(info.ai) {
+        aiToggle.parentElement.querySelector('span').textContent = 'AI 可用';
+        aiToggle.disabled = false;
+      } else {
+        aiToggle.parentElement.querySelector('span').textContent = '需 API Key';
+        aiToggle.checked = false;
+        aiToggle.disabled = true;
+      }
     } else {
       throw new Error('not ok');
     }
@@ -635,14 +651,48 @@ async function startOCR() {
       setStep(3);
       progressFill.style.width = (pctStart + 16) + '%';
 
-      // Parse lines into table
-      const userCols = parseInt(document.getElementById('colCountInput').value) || 0;
+      // Try AI structuring if available
+      let parsed, userCols;
+      const useAI = document.getElementById('aiToggle')?.checked && isLocalOnline;
+      userCols = parseInt(document.getElementById('colCountInput').value) || 0;
+      if(useAI) {
+        try {
+          const aiResp = await fetch(OCR_API + '/api/ai-structure', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({lines: data.lines})
+          });
+          if(aiResp.ok) {
+            const aiData = await aiResp.json();
+            if(aiData.rows && aiData.rows.length > 0) {
+              // AI returns rows with correct column names already
+              parsed = { headers: ['商品代码','商品名称','现售价','现会员价','生效日期'], rows: aiData.rows };
+              progressLabel.textContent = `第 ${i+1}/${total} 张完成 (AI: ${aiData.rows.length} 行)`;
+            } else {
+              throw new Error('AI returned empty');
+            }
+          } else {
+            const errD = await aiResp.json().catch(()=>({}));
+            throw new Error(errD.error || 'AI unavailable');
+          }
+        } catch(aiErr) {
+          console.log('AI structuring failed, using rules:', aiErr.message);
+          parsed = parseLinesToTable(data.lines, userCols);
+        }
+      } else {
+        parsed = parseLinesToTable(data.lines, userCols);
+      }
 
       if(i === 0) {
-        // First image: use header detection
-        const parsed = parseLinesToTable(data.lines, userCols);
         headers = parsed.headers;
         tableData = parsed.rows;
+      } else if(useAI) {
+        // AI rows already have correct keys, just append
+        for(const r of parsed.rows) {
+          const nr = {};
+          headers.forEach(h => { nr[h] = r[h] || '/'; });
+          tableData.push(nr);
+        }
       } else {
         // Subsequent images: treat ALL rows as data (skip header detection)
         appendImageData(data.lines, userCols);

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-"""TableVision Backend — macOS Vision OCR + 静态前端"""
-import http.server, json, subprocess, os, sys, tempfile, re
+"""TableVision Backend — macOS Vision OCR + AI structuring + 静态前端"""
+import http.server, json, subprocess, os, sys, tempfile, re, urllib.request
 from pathlib import Path
 from io import BytesIO
 from fpdf import FPDF
@@ -10,6 +10,11 @@ BASE_DIR = Path(__file__).parent
 OCR_BIN = BASE_DIR / 'ocr'
 FRONTEND = BASE_DIR / 'outputs' / 'image-to-table.html'
 CN_FONT = '/System/Library/Fonts/STHeiti Medium.ttc'
+
+# AI API config (OpenAI compatible)
+AI_API_KEY = os.environ.get('OPENAI_API_KEY', '')
+AI_BASE_URL = os.environ.get('OPENAI_BASE_URL', 'https://api.openai.com/v1')
+AI_MODEL = os.environ.get('AI_MODEL', 'gpt-4o-mini')
 
 def parse_multipart(body, boundary):
     """Simple multipart/form-data parser"""
@@ -118,7 +123,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(FRONTEND.read_bytes())
         elif self.path == '/health':
-            self._json(200, {'status': 'ok', 'ocr': str(OCR_BIN.exists())})
+            ai_available = bool(AI_API_KEY)
+            self._json(200, {'status': 'ok', 'ocr': str(OCR_BIN.exists()), 'ai': ai_available})
         else:
             self.send_error(404)
 
@@ -127,6 +133,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self._handle_ocr()
         elif self.path == '/api/export-pdf':
             self._handle_export_pdf()
+        elif self.path == '/api/ai-structure':
+            self._handle_ai_structure()
         else:
             self.send_error(404)
 
@@ -209,6 +217,93 @@ class Handler(http.server.BaseHTTPRequestHandler):
             sys.stdout.flush()
         except Exception as e:
             print(f"  → PDF ERROR: {e}")
+            sys.stdout.flush()
+            self._json(500, {'error': str(e)})
+
+    def _handle_ai_structure(self):
+        """AI-powered structuring: raw OCR lines → structured 5-column JSON"""
+        if not AI_API_KEY:
+            self._json(503, {'error': 'AI not configured. Set OPENAI_API_KEY environment variable.'})
+            return
+
+        length = int(self.headers.get('Content-Length', 0))
+        body = self.rfile.read(length)
+        try:
+            data = json.loads(body)
+            lines = data.get('lines', [])
+        except Exception as e:
+            self._json(400, {'error': f'Invalid JSON: {e}'})
+            return
+
+        if not lines:
+            self._json(400, {'error': 'No OCR lines provided'})
+            return
+
+        # Build prompt
+        raw_text = '\n'.join(lines)
+        prompt = f"""你是一个精确的数据提取助手。以下是从中国零售调价表格图片中OCR识别出的原始文本。
+
+请从原始文本中提取每一行数据，输出为JSON数组。每一行只包含这5个字段：
+- 商品代码: 6位数字的商品编号（如果没有则为"/"）
+- 商品名称: 商品名称（如果没有则为"/"）
+- 现售价: 当前销售价格，纯数字（如果没有则为"/"）
+- 现会员价: 会员价格，纯数字（如果没有则为"/"）
+- 生效日期: 价格生效日期，格式如"6月25日"（如果没有则为"/"）
+
+注意：
+1. 忽略表头行（含"商品代码"、"商品名称"等标题文字的行）
+2. 忽略非数据行（如页面标题、UI文字等）
+3. 每个字段只填该字段的值，不要把其他字段的值混入
+4. 如果某行完全没有有效数据，跳过该行
+5. 多个价格时，较低的是会员价
+6. 如果只有1个价格，它通常是现售价，会员价填"/"
+
+原始OCR文本：
+{raw_text[:8000]}
+
+只返回JSON数组，不要任何其他文字。格式如下：
+[{{"商品代码":"123456","商品名称":"示例商品","现售价":"5.9","现会员价":"5.5","生效日期":"6月25日"}}]"""
+
+        try:
+            print(f"  → AI structuring {len(lines)} lines...")
+            sys.stdout.flush()
+
+            req_body = json.dumps({
+                'model': AI_MODEL,
+                'messages': [
+                    {'role': 'system', 'content': '你是一个精确的数据提取助手，只返回JSON。'},
+                    {'role': 'user', 'content': prompt}
+                ],
+                'temperature': 0.1,
+                'max_tokens': 8000
+            }).encode()
+
+            req = urllib.request.Request(
+                f"{AI_BASE_URL}/chat/completions",
+                data=req_body,
+                headers={
+                    'Content-Type': 'application/json',
+                    'Authorization': f'Bearer {AI_API_KEY}'
+                }
+            )
+
+            with urllib.request.urlopen(req, timeout=60) as resp:
+                result = json.loads(resp.read())
+                content = result['choices'][0]['message']['content']
+
+            # Extract JSON array from response
+            content = content.strip()
+            if content.startswith('```'):
+                content = re.sub(r'^```\w*\n?', '', content)
+                content = re.sub(r'\n?```$', '', content)
+
+            rows = json.loads(content)
+            print(f"  → AI returned {len(rows)} rows")
+            sys.stdout.flush()
+            self._json(200, {'rows': rows, 'count': len(rows)})
+
+        except Exception as e:
+            print(f"  → AI ERROR: {e}")
             sys.stdout.flush()
             self._json(500, {'error': str(e)})
 

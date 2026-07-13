@@ -835,10 +835,29 @@ function setStep(n) {
 }
 
 // ─── Table Parser (tab-separated lines from Vision OCR) ───
+
+// Common OCR correction map for Chinese retail context
+const OCR_FIXES = {
+  '參与': '参与', '一吗': '一鸣', '畢当': '备注', '畢註': '备注',
+  '碳嫩獵': '', '很忙': '很忙', '無': '', '国委': '', '日目': '',
+  '统—': '统一', '白条': '白象', '豪土': '豪士', '豪±': '豪士',
+  '純净': '纯净', '純': '纯', '峯': '峰',
+};
+
+function correctOcrText(text) {
+  let result = text;
+  for(const [wrong, right] of Object.entries(OCR_FIXES)) {
+    if(result.includes(wrong)) {
+      result = result.replace(new RegExp(wrong, 'g'), right);
+    }
+  }
+  return result;
+}
+
 function parseLinesToTable(lines, userCols) {
   // Each line from backend is tab-separated columns
   const parsed = lines.map(line => {
-    const parts = line.split('\t').map(s => s.trim());
+    const parts = line.split('\t').map(s => correctOcrText(s.trim()));
     return parts.filter(p => p.length > 0);
   }).filter(parts => parts.length > 0);
 

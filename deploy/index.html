@@ -1,0 +1,794 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>TableVision — 图片转表格</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=DM+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+<script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+<style>
+*,*::before,*::after{margin:0;padding:0;box-sizing:border-box}
+:root{
+  --bg-0:#06080d;--bg-1:#0c1018;--bg-2:#111827;--bg-3:#1a2234;--bg-4:#232d42;
+  --border:#1e293b;--border-h:#334155;
+  --text-1:#e2e8f0;--text-2:#94a3b8;--text-3:#64748b;--text-4:#475569;
+  --cyan:#06b6d4;--cyan-g:rgba(6,182,212,.12);--cyan-b:rgba(6,182,212,.25);
+  --green:#10b981;--amber:#f59e0b;--red:#ef4444;--violet:#8b5cf6;
+  --font:'DM Sans',-apple-system,'PingFang SC','Microsoft YaHei','Noto Sans SC',sans-serif;
+  --mono:'IBM Plex Mono','SF Mono','Menlo',monospace;
+  --radius:12px;--radius-s:8px;--radius-xs:6px;
+  --shadow:0 4px 24px rgba(0,0,0,.4);
+  --transition:all .25s cubic-bezier(.4,0,.2,1);
+}
+html{font-size:15px;-webkit-font-smoothing:antialiased}
+body{font-family:var(--font);background:var(--bg-0);color:var(--text-1);min-height:100vh;overflow-x:hidden}
+::selection{background:var(--cyan-b);color:#fff}
+::-webkit-scrollbar{width:6px;height:6px}
+::-webkit-scrollbar-track{background:transparent}
+::-webkit-scrollbar-thumb{background:var(--bg-4);border-radius:3px}
+::-webkit-scrollbar-thumb:hover{background:var(--text-4)}
+
+/* ── Header ── */
+.header{position:sticky;top:0;z-index:100;padding:0 2rem;height:56px;display:flex;align-items:center;justify-content:space-between;
+  background:rgba(6,8,13,.82);backdrop-filter:blur(20px) saturate(1.4);border-bottom:1px solid var(--border)}
+.logo{display:flex;align-items:center;gap:.6rem;font-weight:700;font-size:1.1rem;letter-spacing:-.02em}
+.logo-icon{width:28px;height:28px;border-radius:7px;background:linear-gradient(135deg,var(--cyan),#0e7490);
+  display:flex;align-items:center;justify-content:center;font-size:.85rem;color:#fff;font-family:var(--mono);font-weight:600}
+.header-right{display:flex;align-items:center;gap:1rem}
+.header-badge{font-size:.7rem;padding:.2rem .6rem;border-radius:20px;background:var(--cyan-g);color:var(--cyan);
+  font-family:var(--mono);font-weight:500;border:1px solid rgba(6,182,212,.15)}
+.header-link{color:var(--text-3);font-size:.8rem;text-decoration:none;transition:var(--transition)}
+.header-link:hover{color:var(--text-1)}
+
+/* ── Container ── */
+.container{max-width:1360px;margin:0 auto;padding:0 2rem}
+
+/* ── Hero ── */
+.hero{text-align:center;padding:3.5rem 0 2rem}
+.hero h1{font-size:2.6rem;font-weight:700;letter-spacing:-.04em;line-height:1.15;
+  background:linear-gradient(135deg,#fff 0%,var(--cyan) 50%,#67e8f9 100%);
+  -webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text}
+.hero p{margin-top:.75rem;color:var(--text-3);font-size:1rem;max-width:480px;margin-inline:auto}
+
+/* ── Upload Zone ── */
+.upload-section{max-width:680px;margin:0 auto;padding-bottom:2rem}
+.upload-zone{position:relative;border:2px dashed var(--border-h);border-radius:var(--radius);
+  padding:3.5rem 2rem;text-align:center;cursor:pointer;transition:var(--transition);
+  background:repeating-linear-gradient(45deg,transparent,transparent 10px,rgba(6,182,212,.015) 10px,rgba(6,182,212,.015) 20px)}
+.upload-zone:hover,.upload-zone.dragover{border-color:var(--cyan);background:var(--cyan-g)}
+.upload-zone.dragover{transform:scale(1.01)}
+.upload-icon{font-size:3rem;margin-bottom:1rem;opacity:.6;filter:grayscale(.3)}
+.upload-title{font-size:1.15rem;font-weight:600;color:var(--text-1)}
+.upload-desc{margin-top:.4rem;font-size:.85rem;color:var(--text-3)}
+.upload-hint{margin-top:1rem;display:flex;justify-content:center;gap:1rem}
+.upload-hint span{font-size:.72rem;color:var(--text-4);font-family:var(--mono);padding:.25rem .6rem;
+  background:var(--bg-2);border-radius:4px;border:1px solid var(--border)}
+.upload-input{display:none}
+
+/* ── Settings Bar ── */
+.settings-bar{max-width:680px;margin:1rem auto 0;display:flex;align-items:center;justify-content:center;gap:1.5rem;flex-wrap:wrap}
+.setting-item{display:flex;align-items:center;gap:.5rem;font-size:.82rem;color:var(--text-2)}
+.setting-item label{white-space:nowrap}
+.setting-select{background:var(--bg-2);color:var(--text-1);border:1px solid var(--border);border-radius:var(--radius-xs);
+  padding:.35rem .6rem;font-size:.78rem;font-family:var(--font);cursor:pointer;outline:none;transition:var(--transition)}
+.setting-select:focus{border-color:var(--cyan)}
+.setting-input{width:50px;background:var(--bg-2);color:var(--text-1);border:1px solid var(--border);border-radius:var(--radius-xs);
+  padding:.35rem .4rem;font-size:.78rem;font-family:var(--mono);text-align:center;outline:none;transition:var(--transition)}
+.setting-input:focus{border-color:var(--cyan)}
+
+/* ── Processing Overlay ── */
+.processing{display:none;max-width:680px;margin:2rem auto 0;text-align:center}
+.processing.active{display:block}
+.progress-track{height:4px;background:var(--bg-3);border-radius:2px;overflow:hidden;margin-bottom:1rem}
+.progress-fill{height:100%;background:linear-gradient(90deg,var(--cyan),#67e8f9);border-radius:2px;
+  transition:width .3s ease;width:0%}
+.progress-label{font-size:.85rem;color:var(--text-2);font-family:var(--mono)}
+.processing-steps{margin-top:1.5rem;display:flex;justify-content:center;gap:1.5rem}
+.step{display:flex;align-items:center;gap:.4rem;font-size:.78rem;color:var(--text-4);transition:var(--transition)}
+.step.active{color:var(--cyan)}
+.step.done{color:var(--green)}
+.step-dot{width:8px;height:8px;border-radius:50%;background:var(--bg-4);transition:var(--transition)}
+.step.active .step-dot{background:var(--cyan);box-shadow:0 0 8px var(--cyan-b)}
+.step.done .step-dot{background:var(--green)}
+
+/* ── Workspace ── */
+.workspace{display:none;padding:1.5rem 0 4rem}
+.workspace.active{display:block}
+.workspace-header{display:flex;align-items:center;justify-content:space-between;margin-bottom:1.2rem;flex-wrap:wrap;gap:.8rem}
+.workspace-title{font-size:1.1rem;font-weight:600;display:flex;align-items:center;gap:.5rem}
+.workspace-title .count{font-family:var(--mono);font-size:.75rem;color:var(--cyan);
+  background:var(--cyan-g);padding:.15rem .5rem;border-radius:10px;border:1px solid rgba(6,182,212,.15)}
+.workspace-actions{display:flex;gap:.5rem}
+
+/* ── Buttons ── */
+.btn{display:inline-flex;align-items:center;gap:.4rem;padding:.5rem 1rem;border-radius:var(--radius-xs);
+  font-size:.82rem;font-weight:500;font-family:var(--font);cursor:pointer;transition:var(--transition);
+  border:1px solid transparent;white-space:nowrap}
+.btn-ghost{background:transparent;color:var(--text-2);border-color:var(--border)}
+.btn-ghost:hover{background:var(--bg-3);color:var(--text-1);border-color:var(--border-h)}
+.btn-secondary{background:var(--bg-3);color:var(--text-1);border-color:var(--border)}
+.btn-secondary:hover{background:var(--bg-4);border-color:var(--border-h)}
+.btn-primary{background:var(--cyan);color:#06080d;font-weight:600}
+.btn-primary:hover{background:#22d3ee;transform:translateY(-1px);box-shadow:0 4px 16px rgba(6,182,212,.3)}
+.btn-primary:active{transform:translateY(0)}
+.btn-icon{width:34px;height:34px;padding:0;display:flex;align-items:center;justify-content:center}
+
+/* ── Panels ── */
+.panels{display:grid;grid-template-columns:1fr 1fr;gap:1.2rem;align-items:start}
+@media(max-width:900px){.panels{grid-template-columns:1fr}}
+.panel{background:var(--bg-1);border:1px solid var(--border);border-radius:var(--radius);overflow:hidden}
+.panel-header{display:flex;align-items:center;justify-content:space-between;padding:.75rem 1rem;
+  border-bottom:1px solid var(--border);background:var(--bg-2)}
+.panel-title{font-size:.82rem;font-weight:600;display:flex;align-items:center;gap:.5rem}
+.panel-title .dot{width:7px;height:7px;border-radius:50%}
+.panel-title .dot.blue{background:#3b82f6}
+.panel-title .dot.cyan{background:var(--cyan)}
+.panel-body{padding:1rem;max-height:520px;overflow:auto}
+.image-preview{width:100%;border-radius:var(--radius-xs);display:block}
+.image-preview-container{position:relative}
+.image-scan-line{position:absolute;left:0;right:0;height:2px;background:linear-gradient(90deg,transparent,var(--cyan),transparent);
+  animation:scanMove 2s ease-in-out infinite;opacity:0;transition:opacity .3s}
+.image-scan-line.active{opacity:1}
+@keyframes scanMove{0%{top:0}50%{top:100%}100%{top:0}}
+
+/* ── Table ── */
+.table-wrap{overflow:auto;max-height:480px}
+.data-table{width:100%;border-collapse:separate;border-spacing:0;font-size:.82rem}
+.data-table thead{position:sticky;top:0;z-index:2}
+.data-table th{background:var(--bg-3);color:var(--text-2);font-weight:600;padding:.6rem .75rem;
+  text-align:left;border-bottom:2px solid var(--border-h);white-space:nowrap;font-size:.76rem;
+  text-transform:uppercase;letter-spacing:.05em}
+.data-table td{padding:.55rem .75rem;border-bottom:1px solid var(--border);color:var(--text-1);
+  vertical-align:top;max-width:260px;word-break:break-word}
+.data-table tr:hover td{background:rgba(6,182,212,.04)}
+.data-table td[contenteditable="true"]{outline:none;cursor:text;transition:var(--transition)}
+.data-table td[contenteditable="true"]:focus{background:var(--cyan-g);box-shadow:inset 0 0 0 1.5px var(--cyan-b)}
+.data-table .row-num{color:var(--text-4);font-family:var(--mono);font-size:.72rem;width:32px;text-align:center;
+  background:var(--bg-2);border-right:1px solid var(--border)}
+.data-table th.row-num-head{width:32px;text-align:center;background:var(--bg-3)}
+.data-table .col-handle{cursor:col-resize;color:var(--text-4);font-size:.7rem;padding-left:.3rem;opacity:.4;transition:var(--transition)}
+.data-table th:hover .col-handle{opacity:1}
+
+/* ── Empty state ── */
+.empty-state{text-align:center;padding:3rem 1rem;color:var(--text-4)}
+.empty-state .icon{font-size:2.5rem;margin-bottom:.8rem;opacity:.4}
+.empty-state p{font-size:.85rem}
+
+/* ── Dropdown ── */
+.dropdown{position:relative;display:inline-block}
+.dropdown-menu{display:none;position:absolute;top:calc(100% + 4px);right:0;min-width:160px;
+  background:var(--bg-2);border:1px solid var(--border-h);border-radius:var(--radius-s);
+  box-shadow:var(--shadow);z-index:50;overflow:hidden;animation:dropIn .15s ease}
+.dropdown-menu.open{display:block}
+@keyframes dropIn{from{opacity:0;transform:translateY(-4px)}to{opacity:1;transform:translateY(0)}}
+.dropdown-item{display:flex;align-items:center;gap:.5rem;padding:.55rem .85rem;font-size:.82rem;
+  color:var(--text-2);cursor:pointer;transition:var(--transition);border:none;background:none;width:100%;
+  font-family:var(--font);text-align:left}
+.dropdown-item:hover{background:var(--cyan-g);color:var(--text-1)}
+.dropdown-item .di{font-family:var(--mono);font-size:.68rem;color:var(--text-4)}
+
+/* ── Toast ── */
+.toast{position:fixed;bottom:2rem;left:50%;transform:translateX(-50%) translateY(80px);
+  background:var(--bg-3);color:var(--text-1);padding:.65rem 1.2rem;border-radius:var(--radius-s);
+  font-size:.82rem;border:1px solid var(--border-h);box-shadow:var(--shadow);
+  transition:transform .3s cubic-bezier(.4,0,.2,1),opacity .3s;opacity:0;z-index:200;
+  display:flex;align-items:center;gap:.5rem}
+.toast.show{transform:translateX(-50%) translateY(0);opacity:1}
+.toast.success{border-color:rgba(16,185,129,.3)}
+.toast.error{border-color:rgba(239,68,68,.3)}
+
+/* ── Stats Bar ── */
+.stats-bar{display:flex;gap:1.5rem;padding:.6rem 1rem;background:var(--bg-2);border-radius:var(--radius-s);
+  margin-top:1rem;border:1px solid var(--border)}
+.stat{font-size:.75rem;color:var(--text-3);font-family:var(--mono);display:flex;align-items:center;gap:.3rem}
+.stat b{color:var(--text-2);font-weight:500}
+
+/* ── Animations ── */
+@keyframes fadeUp{from{opacity:0;transform:translateY(12px)}to{opacity:1;transform:translateY(0)}}
+.fade-up{animation:fadeUp .5s ease forwards}
+.delay-1{animation-delay:.1s;opacity:0}
+.delay-2{animation-delay:.2s;opacity:0}
+.delay-3{animation-delay:.3s;opacity:0}
+
+/* ── Footer ── */
+.footer{text-align:center;padding:2rem;color:var(--text-4);font-size:.72rem;font-family:var(--mono);border-top:1px solid var(--border);margin-top:2rem}
+
+/* ── Connection Status ── */
+.conn-status{display:flex;align-items:center;gap:.4rem;font-size:.75rem;font-family:var(--mono);padding:.25rem .6rem;border-radius:20px;border:1px solid var(--border);transition:var(--transition)}
+.conn-status .dot{width:7px;height:7px;border-radius:50%;background:var(--text-4);transition:var(--transition)}
+.conn-status.online{border-color:rgba(16,185,129,.25);color:var(--green)}
+.conn-status.online .dot{background:var(--green);box-shadow:0 0 6px rgba(16,185,129,.5)}
+.conn-status.offline{border-color:rgba(239,68,68,.2);color:var(--red)}
+.conn-status.offline .dot{background:var(--red)}
+.conn-status.checking{border-color:rgba(245,158,11,.2);color:var(--amber)}
+.conn-status.checking .dot{background:var(--amber);animation:pulse 1s infinite}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.3}}
+
+/* ── Service Banner ── */
+.service-banner{display:none;max-width:680px;margin:1rem auto 0;padding:1rem 1.2rem;border-radius:var(--radius-s);
+  background:rgba(239,68,68,.08);border:1px solid rgba(239,68,68,.2);color:var(--text-2);font-size:.82rem;line-height:1.6}
+.service-banner.show{display:block}
+.service-banner code{background:var(--bg-3);padding:.15rem .4rem;border-radius:4px;font-family:var(--mono);font-size:.78rem;color:var(--cyan)}
+.service-banner .banner-title{color:var(--red);font-weight:600;margin-bottom:.4rem;display:flex;align-items:center;gap:.4rem}
+
+/* ── Paste overlay ── */
+.paste-overlay{position:fixed;inset:0;background:rgba(6,8,13,.88);z-index:300;display:none;
+  align-items:center;justify-content:center;backdrop-filter:blur(8px)}
+.paste-overlay.active{display:flex}
+.paste-box{background:var(--bg-2);border:2px dashed var(--cyan);border-radius:var(--radius);
+  padding:3rem;text-align:center;max-width:500px;animation:fadeUp .3s ease}
+.paste-box .icon{font-size:3rem;margin-bottom:1rem}
+.paste-box p{color:var(--text-2);font-size:.9rem}
+</style>
+</head>
+<body>
+
+<!-- Header -->
+<header class="header">
+  <div class="logo">
+    <div class="logo-icon">TV</div>
+    <span>TableVision</span>
+  </div>
+  <div class="header-right">
+    <div class="conn-status checking" id="connStatus">
+      <span class="dot"></span>
+      <span id="connLabel">检测中…</span>
+    </div>
+    <span class="header-badge">macOS Vision</span>
+    <a href="javascript:void(0)" class="header-link" onclick="showHelp()">使用说明</a>
+  </div>
+</header>
+
+<!-- Hero -->
+<div class="container">
+  <section class="hero fade-up">
+    <h1>图片 → 表格</h1>
+    <p>上传包含表格的图片，智能识别并转换为可编辑、可导出的结构化数据</p>
+  </section>
+
+  <!-- Upload -->
+  <section class="upload-section fade-up delay-1">
+    <div class="upload-zone" id="uploadZone">
+      <div class="upload-icon">📷</div>
+      <div class="upload-title">拖放图片到此处，或点击上传</div>
+      <div class="upload-desc">支持 JPG、PNG、BMP、WebP 格式，也可 Ctrl+V 粘贴截图</div>
+      <div class="upload-hint">
+        <span>最大 20MB</span>
+        <span>中文 / 英文</span>
+        <span>本地处理</span>
+      </div>
+      <input type="file" class="upload-input" id="fileInput" accept="image/*">
+    </div>
+
+    <div class="settings-bar">
+      <div class="setting-item">
+        <label>列数</label>
+        <input type="number" class="setting-input" id="colCountInput" value="0" min="0" max="20" step="1" title="0=自动检测">
+        <span style="color:var(--text-4);font-size:.72rem">0=自动</span>
+      </div>
+      <div class="setting-item">
+        <label>列间隔阈值</label>
+        <input type="number" class="setting-input" id="colGapInput" value="40" min="10" max="200" step="5">
+        <span style="color:var(--text-4);font-size:.72rem">px</span>
+      </div>
+      <button class="btn btn-primary" id="startBtn" style="display:none" onclick="startOCR()">
+        ▶ 开始识别
+      </button>
+      <button class="btn btn-ghost" id="resetBtn" style="display:none" onclick="resetAll()">
+        ↺ 重新上传
+      </button>
+    </div>
+  </section>
+
+  <!-- Service Banner (shown when local OCR is offline) -->
+  <div class="service-banner" id="serviceBanner">
+    <div class="banner-title">⚠ 本地 OCR 服务未连接</div>
+    本应用使用 macOS Vision Framework 进行高精度识别，需要在本机运行 OCR 桥接服务。<br>
+    请在终端执行：<code>cd /path/to/tablevision && python3 server.py</code><br>
+    服务启动后刷新此页面即可使用。图片数据仅在本地处理，不会上传到云端。
+  </div>
+
+  <!-- Processing -->
+  <section class="processing" id="processing">
+    <div class="progress-track"><div class="progress-fill" id="progressFill"></div></div>
+    <div class="progress-label" id="progressLabel">正在初始化 OCR 引擎…</div>
+    <div class="processing-steps">
+      <div class="step" id="step1"><span class="step-dot"></span>加载引擎</div>
+      <div class="step" id="step2"><span class="step-dot"></span>识别文字</div>
+      <div class="step" id="step3"><span class="step-dot"></span>解析表格</div>
+      <div class="step" id="step4"><span class="step-dot"></span>生成结果</div>
+    </div>
+  </section>
+
+  <!-- Workspace -->
+  <section class="workspace" id="workspace">
+    <div class="workspace-header">
+      <div class="workspace-title">
+        识别结果 <span class="count" id="cellCount">0 行 × 0 列</span>
+      </div>
+      <div class="workspace-actions">
+        <button class="btn btn-ghost" onclick="addRow()">+ 添加行</button>
+        <button class="btn btn-ghost" onclick="addColumn()">+ 添加列</button>
+        <div class="dropdown">
+          <button class="btn btn-primary" onclick="toggleDropdown()">⬇ 导出</button>
+          <div class="dropdown-menu" id="exportMenu">
+            <button class="dropdown-item" onclick="exportCSV()">导出 CSV <span class="di">.csv</span></button>
+            <button class="dropdown-item" onclick="exportExcel()">导出 Excel <span class="di">.xlsx</span></button>
+            <button class="dropdown-item" onclick="exportPDF()">导出 PDF <span class="di">.pdf</span></button>
+            <button class="dropdown-item" onclick="exportJSON()">导出 JSON <span class="di">.json</span></button>
+            <button class="dropdown-item" onclick="exportMarkdown()">导出 Markdown <span class="di">.md</span></button>
+            <button class="dropdown-item" onclick="copyTable()">复制到剪贴板 <span class="di">TSV</span></button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="panels">
+      <div class="panel fade-up">
+        <div class="panel-header">
+          <div class="panel-title"><span class="dot blue"></span>原始图片</div>
+          <button class="btn btn-ghost btn-icon" onclick="zoomImage()" title="放大">⊕</button>
+        </div>
+        <div class="panel-body">
+          <div class="image-preview-container">
+            <img class="image-preview" id="previewImg" alt="预览">
+            <div class="image-scan-line" id="scanLine"></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="panel fade-up delay-1">
+        <div class="panel-header">
+          <div class="panel-title"><span class="dot cyan"></span>识别表格</div>
+          <button class="btn btn-ghost btn-icon" onclick="toggleEdit()" title="切换编辑" id="editToggle">✎</button>
+        </div>
+        <div class="panel-body">
+          <div class="table-wrap" id="tableWrap">
+            <div class="empty-state" id="emptyState">
+              <div class="icon">📋</div>
+              <p>表格内容将显示在这里</p>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="stats-bar" id="statsBar" style="display:none">
+      <div class="stat">行数 <b id="statRows">0</b></div>
+      <div class="stat">列数 <b id="statCols">0</b></div>
+      <div class="stat">单元格 <b id="statCells">0</b></div>
+      <div class="stat">OCR置信度 <b id="statConf">-</b></div>
+    </div>
+  </section>
+</div>
+
+<!-- Toast -->
+<div class="toast" id="toast"></div>
+
+<!-- Paste Overlay -->
+<div class="paste-overlay" id="pasteOverlay">
+  <div class="paste-box">
+    <div class="icon">📋</div>
+    <p>松开以粘贴图片</p>
+  </div>
+</div>
+
+<footer class="footer">
+  TABLEVISION · macOS Vision OCR 引擎 · 所有数据仅在本地处理
+</footer>
+
+<script>
+// ─── State ───
+let uploadedFile = null;
+let uploadedDataUrl = null;
+let tableData = [];
+let headers = [];
+let isEditable = true;
+let ocrConfidence = 0;
+const OCR_API = 'http://localhost:8765';
+let isLocalOnline = false;
+
+// ─── Connection Detection ───
+async function checkConnection() {
+  const status = document.getElementById('connStatus');
+  const label = document.getElementById('connLabel');
+  const banner = document.getElementById('serviceBanner');
+
+  status.className = 'conn-status checking';
+  label.textContent = '检测中…';
+
+  try {
+    const resp = await fetch(OCR_API + '/health', { signal: AbortSignal.timeout(3000) });
+    if (resp.ok) {
+      isLocalOnline = true;
+      status.className = 'conn-status online';
+      label.textContent = '本地服务已连接';
+      banner.classList.remove('show');
+    } else {
+      throw new Error('not ok');
+    }
+  } catch {
+    isLocalOnline = false;
+    status.className = 'conn-status offline';
+    label.textContent = '未连接';
+    banner.classList.add('show');
+  }
+}
+checkConnection();
+// Re-check every 10 seconds
+setInterval(checkConnection, 10000);
+
+// ─── Upload Handling ───
+const uploadZone = document.getElementById('uploadZone');
+const fileInput = document.getElementById('fileInput');
+const startBtn = document.getElementById('startBtn');
+const resetBtn = document.getElementById('resetBtn');
+
+uploadZone.addEventListener('click', () => fileInput.click());
+fileInput.addEventListener('change', e => { if(e.target.files[0]) handleFile(e.target.files[0]); });
+
+uploadZone.addEventListener('dragover', e => { e.preventDefault(); uploadZone.classList.add('dragover'); });
+uploadZone.addEventListener('dragleave', () => uploadZone.classList.remove('dragover'));
+uploadZone.addEventListener('drop', e => {
+  e.preventDefault(); uploadZone.classList.remove('dragover');
+  const f = e.dataTransfer.files[0];
+  if(f && f.type.startsWith('image/')) handleFile(f);
+});
+
+document.addEventListener('paste', e => {
+  const items = e.clipboardData?.items;
+  if(!items) return;
+  for(const item of items) {
+    if(item.type.startsWith('image/')) { handleFile(item.getAsFile()); break; }
+  }
+});
+
+function handleFile(file) {
+  if(file.size > 20 * 1024 * 1024) { toast('文件超过 20MB 限制', 'error'); return; }
+  uploadedFile = file;
+  const reader = new FileReader();
+  reader.onload = e => {
+    uploadedDataUrl = e.target.result;
+    document.getElementById('previewImg').src = uploadedDataUrl;
+    uploadZone.innerHTML = `
+      <div class="upload-icon" style="opacity:.3">✓</div>
+      <div class="upload-title">${file.name}</div>
+      <div class="upload-desc">${(file.size/1024).toFixed(1)} KB · 已就绪</div>
+    `;
+    startBtn.style.display = 'inline-flex';
+    resetBtn.style.display = 'inline-flex';
+  };
+  reader.readAsDataURL(file);
+}
+
+function resetAll() {
+  uploadedFile = null; uploadedDataUrl = null; uploadedBlob = null;
+  tableData = []; headers = [];
+  fileInput.value = '';
+  uploadZone.innerHTML = `
+    <div class="upload-icon">📷</div>
+    <div class="upload-title">拖放图片到此处，或点击上传</div>
+    <div class="upload-desc">支持 JPG、PNG、BMP、WebP 格式，也可 Ctrl+V 粘贴截图</div>
+    <div class="upload-hint"><span>最大 20MB</span><span>中文 / 英文</span><span>本地处理</span></div>
+  `;
+  startBtn.style.display = 'none';
+  resetBtn.style.display = 'none';
+  document.getElementById('processing').classList.remove('active');
+  document.getElementById('workspace').classList.remove('active');
+  document.getElementById('statsBar').style.display = 'none';
+}
+
+// ─── OCR Engine (macOS Vision via backend) ───
+async function startOCR() {
+  if(!uploadedFile && !uploadedDataUrl) return;
+  if(!isLocalOnline) {
+    toast('本地 OCR 服务未连接，请先启动 python3 server.py', 'error');
+    return;
+  }
+  const processing = document.getElementById('processing');
+  const workspace = document.getElementById('workspace');
+  processing.classList.add('active');
+  workspace.classList.remove('active');
+  document.getElementById('scanLine').classList.add('active');
+
+  const progressFill = document.getElementById('progressFill');
+  const progressLabel = document.getElementById('progressLabel');
+
+  setStep(1);
+  progressLabel.textContent = '正在连接 OCR 引擎…';
+  progressFill.style.width = '10%';
+
+  try {
+    // Get image blob
+    let blob;
+    if(uploadedFile) {
+      blob = uploadedFile;
+    } else {
+      const resp = await fetch(uploadedDataUrl);
+      blob = await resp.blob();
+    }
+
+    setStep(2);
+    progressLabel.textContent = '正在使用 macOS Vision 识别文字（高质量中文 OCR）…';
+    progressFill.style.width = '30%';
+
+    // POST to backend
+    const formData = new FormData();
+    formData.append('image', blob, uploadedFile?.name || 'image.png');
+
+    const resp = await fetch(OCR_API + '/api/ocr', {
+      method: 'POST',
+      body: formData
+    });
+
+    if(!resp.ok) {
+      const errData = await resp.json().catch(() => ({error: resp.statusText}));
+      throw new Error(errData.error || `HTTP ${resp.status}`);
+    }
+
+    const data = await resp.json();
+    progressFill.style.width = '80%';
+
+    if(!data.lines || data.lines.length === 0) {
+      throw new Error('未识别到任何文字内容');
+    }
+
+    setStep(3);
+    progressFill.style.width = '90%';
+    progressLabel.textContent = `已识别 ${data.count} 行，正在解析表格结构…`;
+
+    // Parse lines into table
+    const userCols = parseInt(document.getElementById('colCountInput').value) || 0;
+    const parsed = parseLinesToTable(data.lines, userCols);
+    headers = parsed.headers;
+    tableData = parsed.rows;
+    ocrConfidence = 0;
+
+    setStep(4);
+    progressFill.style.width = '100%';
+    progressLabel.textContent = `完成！识别到 ${tableData.length} 行 × ${headers.length} 列`;
+
+    setTimeout(() => {
+      processing.classList.remove('active');
+      workspace.classList.add('active');
+      document.getElementById('scanLine').classList.remove('active');
+      renderTable();
+      updateStats();
+    }, 500);
+
+  } catch(err) {
+    progressLabel.textContent = '识别失败: ' + err.message;
+    progressFill.style.width = '100%';
+    progressFill.style.background = 'var(--red)';
+    if(err.message.includes('fetch') || err.message.includes('Failed') || err.message.includes('NetworkError') || err.message.includes('aborted')) {
+      toast('无法连接本地 OCR 服务，请确保已运行 python3 server.py', 'error');
+      checkConnection();
+    } else {
+      toast('OCR 识别失败: ' + err.message, 'error');
+    }
+    console.error('OCR Error:', err);
+    setTimeout(() => { progressFill.style.background = ''; }, 2000);
+  }
+}
+
+function setStep(n) {
+  for(let i=1;i<=4;i++){
+    const el = document.getElementById('step'+i);
+    el.classList.remove('active','done');
+    if(i < n) el.classList.add('done');
+    else if(i === n) el.classList.add('active');
+  }
+}
+
+// ─── Table Parser (tab-separated lines from Vision OCR) ───
+function parseLinesToTable(lines, userCols) {
+  // Each line from backend is tab-separated columns
+  const parsed = lines.map(line => {
+    const parts = line.split('\t').map(s => s.trim());
+    return parts.filter(p => p.length > 0);
+  }).filter(parts => parts.length > 0);
+
+  if(parsed.length === 0) return { headers: ['列1'], rows: [] };
+
+  // Determine column count
+  let numCols;
+  if(userCols > 0) {
+    numCols = userCols;
+  } else {
+    // Auto-detect: find the most common column count
+    const counts = {};
+    parsed.forEach(p => { counts[p.length] = (counts[p.length] || 0) + 1; });
+    numCols = parseInt(Object.entries(counts).sort((a,b) => b[1]-a[1])[0][0]);
+  }
+
+  // Normalize rows to numCols
+  const normalized = parsed.map(parts => {
+    const row = parts.slice(0, numCols);
+    while(row.length < numCols) row.push('');
+    return row;
+  });
+
+  // First row as headers
+  let hdrs, dataRows;
+  if(normalized.length > 1) {
+    hdrs = normalized[0].map((h, i) => h || `列${i+1}`);
+    dataRows = normalized.slice(1).map(r => {
+      const obj = {};
+      hdrs.forEach((h, i) => { obj[h] = r[i] || ''; });
+      return obj;
+    });
+  } else {
+    hdrs = normalized[0].map((_, i) => `列${i+1}`);
+    dataRows = normalized.map(r => {
+      const obj = {};
+      hdrs.forEach((h, i) => { obj[h] = r[i] || ''; });
+      return obj;
+    });
+  }
+
+  return { headers: hdrs, rows: dataRows };
+}
+
+// ─── Render Table ───
+function renderTable() {
+  const wrap = document.getElementById('tableWrap');
+  const empty = document.getElementById('emptyState');
+
+  if(tableData.length === 0 && headers.length === 0) {
+    empty.style.display = 'block'; return;
+  }
+  empty.style.display = 'none';
+
+  let html = '<table class="data-table"><thead><tr><th class="row-num-head">#</th>';
+  headers.forEach((h, i) => {
+    html += `<th contenteditable="${isEditable}" data-hi="${i}">${esc(h)}<span class="col-handle">⋮</span></th>`;
+  });
+  html += '</tr></thead><tbody>';
+
+  tableData.forEach((row, ri) => {
+    html += `<tr><td class="row-num">${ri+1}</td>`;
+    headers.forEach(h => {
+      html += `<td contenteditable="${isEditable}" data-r="${ri}" data-c="${h}">${esc(row[h] || '')}</td>`;
+    });
+    html += '</tr>';
+  });
+  html += '</tbody></table>';
+  wrap.innerHTML = html;
+
+  wrap.querySelectorAll('td[contenteditable]').forEach(td => {
+    td.addEventListener('blur', () => {
+      const r = td.dataset.r, c = td.dataset.c;
+      if(r !== undefined && c !== undefined && tableData[r]) tableData[r][c] = td.innerHTML.replace(/<br\s*\/?>/gi, '\\n').replace(/<[^>]*>/g, '').trim();
+    });
+  });
+  wrap.querySelectorAll('th[contenteditable]').forEach(th => {
+    th.addEventListener('blur', () => {
+      const hi = th.dataset.hi;
+      if(hi !== undefined) {
+        const oldH = headers[hi];
+        const newH = th.textContent.replace('⋮','').trim();
+        if(newH && newH !== oldH) {
+          headers[hi] = newH;
+          tableData.forEach(row => { row[newH] = row[oldH] || ''; if(newH !== oldH) delete row[oldH]; });
+        }
+      }
+    });
+  });
+
+  document.getElementById('cellCount').textContent = `${tableData.length} 行 × ${headers.length} 列`;
+}
+
+function esc(s) { return (s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/\\n/g,'<br>'); }
+
+function updateStats() {
+  const bar = document.getElementById('statsBar');
+  bar.style.display = 'flex';
+  document.getElementById('statRows').textContent = tableData.length;
+  document.getElementById('statCols').textContent = headers.length;
+  document.getElementById('statCells').textContent = tableData.length * headers.length;
+  document.getElementById('statConf').textContent = 'Vision';
+}
+
+// ─── Table Operations ───
+function addRow() {
+  const row = {}; headers.forEach(h => row[h] = '');
+  tableData.push(row); renderTable(); updateStats();
+}
+function addColumn() {
+  const name = `列${headers.length + 1}`; headers.push(name);
+  tableData.forEach(r => r[name] = ''); renderTable(); updateStats();
+}
+function toggleEdit() {
+  isEditable = !isEditable;
+  document.getElementById('editToggle').textContent = isEditable ? '✎' : '🔒';
+  renderTable();
+}
+function zoomImage() {
+  const img = document.getElementById('previewImg');
+  img.style.maxHeight = img.style.maxHeight ? '' : 'none';
+}
+
+// ─── Export ───
+function getTableArray() {
+  return [headers, ...tableData.map(r => headers.map(h => (r[h] || '').replace(/\\n/g, '\n')))];
+}
+function exportCSV() {
+  const arr = getTableArray();
+  const csv = arr.map(row => row.map(c => `"${(c||'').replace(/"/g,'""')}"`).join(',')).join('\n');
+  download('\uFEFF' + csv, 'table-data.csv', 'text/csv;charset=utf-8');
+  closeDropdown(); toast('CSV 已导出', 'success');
+}
+function exportExcel() {
+  const ws = XLSX.utils.aoa_to_sheet(getTableArray());
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, 'Sheet1');
+  XLSX.writeFile(wb, 'table-data.xlsx');
+  closeDropdown(); toast('Excel 已导出', 'success');
+}
+async function exportPDF() {
+  closeDropdown();
+  toast('正在生成 PDF…', '');
+  try {
+    const resp = await fetch(OCR_API + '/api/export-pdf', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ headers, rows: tableData })
+    });
+    if(!resp.ok) {
+      const err = await resp.json().catch(() => ({error: resp.statusText}));
+      throw new Error(err.error || `HTTP ${resp.status}`);
+    }
+    const blob = await resp.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = 'table-data.pdf'; a.click();
+    URL.revokeObjectURL(url);
+    toast('PDF 已导出', 'success');
+  } catch(e) {
+    toast('PDF 导出失败: ' + e.message, 'error');
+  }
+}
+function exportJSON() {
+  download(JSON.stringify(tableData, null, 2), 'table-data.json', 'application/json');
+  closeDropdown(); toast('JSON 已导出', 'success');
+}
+function exportMarkdown() {
+  let md = '| ' + headers.join(' | ') + ' |\n| ' + headers.map(() => '---').join(' | ') + ' |\n';
+  tableData.forEach(r => {
+    md += '| ' + headers.map(h => (r[h]||'').replace(/\|/g,'\\|')).join(' | ') + ' |\n';
+  });
+  download(md, 'table-data.md', 'text/markdown');
+  closeDropdown(); toast('Markdown 已导出', 'success');
+}
+function copyTable() {
+  const tsv = [headers.join('\t'), ...tableData.map(r => headers.map(h => r[h]||'').join('\t'))].join('\n');
+  navigator.clipboard.writeText(tsv).then(() => { closeDropdown(); toast('已复制到剪贴板 (TSV)', 'success'); });
+}
+function download(content, filename, type) {
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([content], {type}));
+  a.download = filename; a.click(); URL.revokeObjectURL(a.href);
+}
+
+// ─── Dropdown ───
+function toggleDropdown() { document.getElementById('exportMenu').classList.toggle('open'); }
+function closeDropdown() { document.getElementById('exportMenu').classList.remove('open'); }
+document.addEventListener('click', e => { if(!e.target.closest('.dropdown')) closeDropdown(); });
+
+// ─── Toast ───
+function toast(msg, type='') {
+  const t = document.getElementById('toast');
+  t.className = 'toast ' + type;
+  t.innerHTML = (type==='success'?'✓ ':type==='error'?'✗ ':'') + msg;
+  t.classList.add('show');
+  setTimeout(() => t.classList.remove('show'), 4000);
+}
+
+// ─── Help ───
+function showHelp() {
+  toast('上传图片 → 点击"开始识别" → 编辑表格 → 导出文件', '');
+}
+</script>
+</body>
+</html>

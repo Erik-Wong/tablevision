@@ -1,0 +1,9 @@
+# TableVision - Git Ignore
+.DS_Store
+*.pyc
+__pycache__/
+ocr
+uploads/*
+!uploads/.gitkeep
+outputs/*.xlsx
+.vercel
